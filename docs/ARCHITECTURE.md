@@ -20,7 +20,7 @@
 
 ## Multi-tenancy
 
-Tabelas de domínio têm RLS + FORCE RLS. Toda operação da API usa `set_config('app.tenant_id', ..., true)` dentro de transação. `collectors` fica fora de RLS porque a resolução do webhook ocorre antes de o tenant ser conhecido; webhook autenticado + collector id resolvem o tenant. `outbox_events` fica fora de RLS para o worker cross-tenant e nunca é exposto diretamente ao usuário.
+Tabelas de domínio têm RLS + FORCE RLS. Toda operação da API usa `set_config('app.tenant_id', ..., true)` dentro de transação. `collectors` fica fora de RLS porque a resolução do webhook ocorre antes de o tenant ser conhecido; webhook autenticado + collector id resolvem o tenant. `outbox_events` também usa RLS + FORCE RLS. O worker cross-tenant usa uma identidade separada e explicitamente privilegiada (`WORKER_DATABASE_URL`), enquanto a API continua tenant-scoped.
 
 ## Agentes
 
@@ -32,3 +32,7 @@ Os agentes definidos pelo produto são especializações lógicas no mesmo runti
 - **OPTIONAL PROVIDER**: WPPConnect.
 - **RESERVE**: Temporal (workflows distribuídos longos), pgvector/RAG (somente quando houver caso medido), Chatwoot (somente se substituir conscientemente a interface humana própria).
 - **REJECT AS CORE**: acoplamento direto a Baileys/Evolution/WPPConnect; Redis apenas para fila; múltiplos agent frameworks sobrepostos.
+
+## AI defaults
+
+The default general model is `gpt-5.6-terra` for cost/intelligence balance; audio transcription defaults to `gpt-transcribe`. Both are configuration values and may be changed without altering domain code.

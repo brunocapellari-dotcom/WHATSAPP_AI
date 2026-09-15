@@ -4,7 +4,7 @@ import { Pool } from 'pg';
 import { loadConfig } from '../src/config.js';
 
 const config = loadConfig();
-const pool = new Pool({ connectionString: config.DATABASE_URL, max: 2 });
+const pool = new Pool({ connectionString: config.MIGRATION_DATABASE_URL ?? config.DATABASE_URL, max: 2 });
 try {
   await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`);
   const dir = resolve('db/migrations');

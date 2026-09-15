@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [main, 'build/**', 'feat/**', 'fix/**']
+    branches: [main]
   pull_request:
     branches: [main]
 permissions:
@@ -23,8 +23,8 @@ jobs:
     env:
       NODE_ENV: test
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/whatsapp_ai
-      APP_ENCRYPTION_KEY: 01234567890123456789012345678901
-      PII_HMAC_KEY: 01234567890123456789012345678901
+      APP_ENCRYPTION_KEY: "01234567890123456789012345678901"
+      PII_HMAC_KEY: "01234567890123456789012345678901"
       INTERNAL_API_KEY: test-internal-api-key-123456
       META_VERIFY_TOKEN: test-verify
       META_APP_SECRET: test-app-secret
@@ -36,6 +36,13 @@ jobs:
           node-version: 22
       - name: Install
         run: npm install --ignore-scripts
+      - name: Preserve generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-lockfile
+          path: package-lock.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Typecheck
         run: npm run typecheck
       - name: Migrate database

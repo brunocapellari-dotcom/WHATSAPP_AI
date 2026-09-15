@@ -1,0 +1,30 @@
+import { PgBoss } from 'pg-boss';
+
+export class JobQueue {
+  private readonly boss: PgBoss;
+  constructor(connectionString: string) {
+    this.boss = new PgBoss(connectionString);
+    this.boss.on('error', (error) => console.error('pg-boss', error));
+  }
+
+  async start() {
+    await this.boss.start();
+    await this.boss.createQueue('outbox-publish-dlq');
+    await this.boss.createQueue('outbox-publish', {
+      retryLimit: 8, retryDelay: 15, retryBackoff: true, deadLetter: 'outbox-publish-dlq',
+    });
+    await this.boss.createQueue('followup-dlq');
+    await this.boss.createQueue('followup', {
+      retryLimit: 8, retryDelay: 60, retryBackoff: true, deadLetter: 'followup-dlq',
+    });
+  }
+
+  async stop() { await this.boss.stop({ graceful: true }); }
+  async scheduleOutbox() { return this.boss.send('outbox-publish', {}, { singletonKey: 'outbox-publish', singletonSeconds: 5 }); }
+  async scheduleFollowup(data: Record<string, unknown>, startAfter: Date) {
+    return this.boss.send('followup', data, { startAfter });
+  }
+  async workOutbox(handler: () => Promise<void>) {
+    await this.boss.work('outbox-publish', async () => { await handler(); });
+  }
+}
