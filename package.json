@@ -1,0 +1,47 @@
+{
+  "name": "whatsapp-ai",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:e2e": "vitest run tests/e2e",
+    "test:security": "vitest run tests/security",
+    "check": "npm run typecheck && npm test",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/src/main.js",
+    "worker": "node dist/src/worker.js",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "format": "biome format --write .",
+    "lint": "biome check .",
+    "bootstrap": "tsx scripts/bootstrap.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "description": "Secure WhatsApp intelligence and business automation platform with Freight Intelligence for AgroLog MT",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@fastify/helmet": "^13.0.0",
+    "@fastify/rate-limit": "^10.0.0",
+    "fastify": "^5.0.0",
+    "fastify-raw-body": "^5.0.0",
+    "mammoth": "^1.8.0",
+    "openai": "^6.0.0",
+    "pg": "^8.0.0",
+    "pg-boss": "^12.0.0",
+    "prom-client": "^15.0.0",
+    "xlsx": "^0.18.5",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.2.4",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.0.0"
+  }
+}

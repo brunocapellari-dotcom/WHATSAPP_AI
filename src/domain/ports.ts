@@ -1,0 +1,17 @@
+import type { FreightEvent, FreightFields, FreightObservation, OutboxEvent, ProviderCapabilities, RawMessage } from './schemas.js';
+export interface WhatsAppProvider { readonly id:string; readonly capabilities:ProviderCapabilities; sendText(input:{tenantId:string;to:string;text:string}):Promise<{messageId:string}>; normalizeInbound(input:unknown,context:{tenantId:string;collectorId:string}):Promise<RawMessage[]>; health():Promise<{ok:boolean;details?:Record<string,unknown>}>; downloadMedia?(reference:string):Promise<DownloadedMedia>; }
+export interface StructuredLanguageModel { extractFreight(text:string):Promise<Partial<FreightFields>>; classifyRelevance(text:string):Promise<{relevant:boolean;confidence:number;reason:string}>; }
+export interface MessageRepository { saveRaw(message:RawMessage):Promise<'inserted'|'duplicate'>; saveObservation(observation:FreightObservation):Promise<void>; findFreightEventByFingerprint(tenantId:string,fingerprint:string):Promise<FreightEvent|null>; saveFreightEvent(event:FreightEvent):Promise<void>; enqueueOutbox(event:OutboxEvent):Promise<void>; }
+export interface EntityResolver { resolveCity(value:string|null):Promise<{id:string;canonicalName:string}|null>; resolveCompany(value:string|null):Promise<{id:string;canonicalName:string}|null>; resolveProduct(value:string|null):Promise<{id:string;canonicalName:string}|null>; }
+export interface MalwareScanner { scan(input:Uint8Array):Promise<{clean:boolean;signature?:string}>; }
+export interface AuditSink { write(event:{tenantId:string;actor:string;action:string;outcome:'ALLOW'|'DENY'|'ERROR';target?:string;metadata?:Record<string,unknown>}):Promise<void>; }
+export type CollectorPurpose='BUSINESS'|'FREIGHT_INTELLIGENCE';
+export type ResolvedCollector={collectorId:string;tenantId:string;provider:string;account:string;purpose:CollectorPurpose;status:'HEALTHY'|'DEGRADED'|'DOWN'|'DISABLED';webhookSecretHash?:string};
+export interface CollectorResolver { resolve(collectorId:string):Promise<ResolvedCollector|null>; }
+export interface QuarantineStore { put(message:RawMessage,expiresAt:Date):Promise<void>; mark(message:RawMessage,disposition:'PROMOTED'|'DISCARDED'|'REJECTED'):Promise<void>; }
+export type DownloadedMedia={bytes:Uint8Array;mimeType:string;fileName?:string};
+export interface ContentProcessor { extract(input:DownloadedMedia&{messageType:RawMessage['messageType']}):Promise<string>; }
+export type BusinessToolCall={name:string;input:Record<string,unknown>};
+export type BusinessPlan={role:'FRONT_DESK'|'SALES'|'QUOTE'|'CRM'|'SCHEDULING'|'SUPPORT'|'HUMAN_HANDOFF';reply:string;toolCalls:BusinessToolCall[];handoff:boolean;handoffReason:string|null};
+export interface BusinessDecisionModel { plan(input:{message:string;tools:Array<{name:string;description:string;risk:string}>;suspicious:boolean}):Promise<BusinessPlan>; }
+export interface BusinessMessageHandler { handle(message:RawMessage,provider:WhatsAppProvider):Promise<{reply:string;handoff:boolean;replyMessageId?:string}>; }

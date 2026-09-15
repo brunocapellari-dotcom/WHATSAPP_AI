@@ -1,0 +1,48 @@
+name: CI
+on:
+  push:
+    branches: [main, 'build/**', 'feat/**', 'fix/**']
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: whatsapp_ai
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d whatsapp_ai"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/whatsapp_ai
+      APP_ENCRYPTION_KEY: 01234567890123456789012345678901
+      PII_HMAC_KEY: 01234567890123456789012345678901
+      INTERNAL_API_KEY: test-internal-api-key-123456
+      META_VERIFY_TOKEN: test-verify
+      META_APP_SECRET: test-app-secret
+      META_GRAPH_VERSION: v26.0
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Install
+        run: npm install --ignore-scripts
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Migrate database
+        run: npm run db:migrate
+      - name: Full regression suite
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Docker build
+        run: docker build -t whatsapp-ai:${{ github.sha }} .

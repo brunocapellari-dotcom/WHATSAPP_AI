@@ -16,4 +16,49 @@ Plataforma própria de inteligência e automação sobre WhatsApp, com dois dom�
 - verdade é classificada por campo: `OBSERVADO`, `INFERIDO`, `ESTIMADO`, `CONFIRMADO_EXTERNAMENTE`;
 - integração com AgroLog usa Transactional Outbox e idempotência, nunca escrita direta nas tabelas analíticas.
 
-A implementação completa é desenvolvida e validada em branch antes de ser incorporada à `main`.
+## Arquitetura
+
+```text
+WhatsApp Provider
+      |
+      v
+Webhook/Auth/Rate Limit
+      |
+      v
+Encrypted Quarantine ----> reject/discard/expire
+      |
+      +--> governed Raw Message
+              |
+              +--> BUSINESS -> Agent Runtime -> Policy -> Structured Tools -> Reply/Handoff
+              |
+              +--> FREIGHT -> Relevance -> Extraction -> Entity Resolution
+                               -> Dedup -> Quality -> FreightObservation/FreightEvent
+                               -> Outbox -> AgroLog Gateway
+```
+
+O projeto é um **modular monolith** em TypeScript/Node 22. PostgreSQL é a fonte transacional; `pg-boss` executa jobs duráveis sem introduzir Redis. Temporal fica reservado para workflows distribuídos de longa duração se houver evidência de necessidade.
+
+## Providers
+
+- `meta-cloud`: provider oficial. Graph API padrão `v26.0`. `managedGroups` e `existingGroups` são capacidades diferentes; o provider oficial não é tratado como acesso geral a grupos preexistentes.
+- `wppconnect`: adapter opcional e isolado para cenários autorizados que dependam de WhatsApp Web. Ativação exige avaliação operacional, jurídica e de risco.
+- `mock`: provider determinístico exclusivo para testes.
+
+## Executar localmente
+
+1. Copie `.env.example` para `.env` e substitua segredos de exemplo.
+2. `docker compose run --rm migrate`
+3. `docker compose up --build api worker`
+4. Live: `GET /health/live`; ready: `GET /health/ready`; métricas: `GET /metrics`.
+
+Nunca comite `.env`, tokens, cookies ou sessões do WhatsApp.
+
+## Testes
+
+`npm test` executa a matriz automatizada: Freight E2E, Business E2E, Test Lab, multimodal, provider Meta, deduplicação, entity resolution e segurança. Em CI também são executados PostgreSQL/RLS, migrations, typecheck, build, Docker build, CodeQL, Gitleaks, Trivy e `npm audit`.
+
+O termo “100% testado” neste projeto significa **100% dos cenários obrigatórios da Acceptance Matrix aprovados**, não uma taxa artificial de 100% de cobertura de linhas.
+
+## Estado operacional
+
+A arquitetura e a implementação base são executáveis sem depender de um provider específico. Produção só pode ser marcada como `OPERATIONAL` depois dos testes com credenciais reais autorizadas de WhatsApp, storage/ClamAV, OpenAI, AgroLog Gateway, backup/restore e testes de falha em staging. Veja `docs/GAP_ANALYSIS.md` e `docs/ACCEPTANCE_MATRIX.md`.
