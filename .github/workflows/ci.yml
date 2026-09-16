@@ -1,14 +1,22 @@
 name: CI
 on:
+  workflow_dispatch:
   push:
     branches: [main, 'build/**']
   pull_request:
     branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17-alpine
@@ -30,19 +38,23 @@ jobs:
       META_APP_SECRET: test-app-secret
       META_GRAPH_VERSION: v26.0
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
-      - name: Install
+      - name: Install and generate candidate lockfile
         run: npm install --ignore-scripts
       - name: Preserve generated lockfile
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: npm-lockfile
+          name: npm-lockfile-${{ github.sha }}
           path: package-lock.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 3
+      - name: Lint
+        run: npm run lint
       - name: Typecheck
         run: npm run typecheck
       - name: Migrate database
