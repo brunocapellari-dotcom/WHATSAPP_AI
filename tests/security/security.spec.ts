@@ -27,12 +27,19 @@ describe('security boundaries', () => {
     expect(verifyWebhookChallenge({ mode: 'subscribe', verifyToken: 'bad', challenge: '123', expectedVerifyToken: 'abc' })).toBeNull();
   });
 
-  it('rejects MIME spoofing and malware', async () => {
+  it('rejects MIME spoofing, unknown binary content and malware', async () => {
     const exe = new Uint8Array([0x4d, 0x5a, 0x90, 0x00]);
     expect((await validateAttachment({ bytes: exe, declaredMime: 'application/x-msdownload', maxBytes: 1000, scanner: cleanScanner })).accepted).toBe(false);
-    const fakePdf = new Uint8Array([0x89,0x50,0x4e,0x47,0x00]);
-    expect((await validateAttachment({ bytes: fakePdf, declaredMime: 'application/pdf', maxBytes: 1000, scanner: cleanScanner })).reason).toBe('mime_magic_mismatch');
-    const pdf = new Uint8Array([0x25,0x50,0x44,0x46,0x2d]);
+
+    const png = new Uint8Array([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00]);
+    expect((await validateAttachment({ bytes: png, declaredMime: 'application/pdf', maxBytes: 1000, scanner: cleanScanner })).reason).toBe('mime_magic_mismatch');
+
+    const unknown = new Uint8Array([0xde,0xad,0xbe,0xef,0x01,0x02,0x03,0x04]);
+    expect((await validateAttachment({ bytes: unknown, declaredMime: 'application/pdf', maxBytes: 1000, scanner: cleanScanner })).reason).toBe('mime_unrecognized');
+
+    const pdf = new TextEncoder().encode('%PDF-1.7\n');
+    expect((await validateAttachment({ bytes: pdf, declaredMime: 'text/plain', maxBytes: 1000, scanner: cleanScanner })).reason).toBe('text_contains_binary_signature');
+
     const infected = { async scan() { return { clean: false, signature: 'EICAR-Test-Signature' }; } };
     expect((await validateAttachment({ bytes: pdf, declaredMime: 'application/pdf', maxBytes: 1000, scanner: infected })).reason).toContain('malware');
   });
