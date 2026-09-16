@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { estimateTextCostUsd, responseUsageSample } from '../../src/observability/ai-usage.js';
 
 describe('AI usage accounting', () => {
-  it('accounts for Terra cached and uncached tokens with the versioned price table', () => {
+  it('accounts for Terra cached and uncached tokens with long-context pricing', () => {
     const cost = estimateTextCostUsd('gpt-5.6-terra', 1_000_000, 250_000, 100_000);
-    // 750k * $2/M + 250k * $0.20/M + 100k * $12/M
-    // Long-context pricing applies because total input is >272k: input rates x2, output x1.5.
-    expect(cost).toBeCloseTo(5.85, 8);
+    // Long-context pricing (>272k input): input rates x2 and output rate x1.5.
+    // 750k uncached = $3.00; 250k cached = $0.10; 100k output = $1.80.
+    expect(cost).toBeCloseTo(4.9, 8);
   });
 
   it('does not invent a cost for unknown models', () => {
