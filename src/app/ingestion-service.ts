@@ -28,15 +28,24 @@ export class IngestionService {
       if (!message.text && message.attachmentReference && provider.downloadMedia && this.media) {
         try {
           const media = await provider.downloadMedia(message.attachmentReference);
-          const validation = await validateAttachment({ bytes: media.bytes, declaredMime: media.mimeType, maxBytes: this.media.maxBytes, scanner: this.media.scanner });
-          if (!validation.accepted) {
+          const validation = await validateAttachment({
+            bytes: media.bytes,
+            declaredMime: media.mimeType,
+            maxBytes: this.media.maxBytes,
+            scanner: this.media.scanner,
+          });
+          if (!validation.accepted || !validation.detectedMime) {
             const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
             await this.quarantine.put(message, expiresAt);
             await this.quarantine.mark(message, 'REJECTED');
             results.push({ message, disposition: `REJECTED:${validation.reason}` });
             continue;
           }
-          const text = await this.media.processor.extract({ ...media, messageType: message.messageType });
+          const text = await this.media.processor.extract({
+            ...media,
+            mimeType: validation.detectedMime,
+            messageType: message.messageType,
+          });
           message = { ...message, text };
         } catch {
           const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
