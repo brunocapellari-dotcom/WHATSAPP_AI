@@ -1,36 +1,59 @@
 name: Security
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'build/**']
   pull_request:
     branches: [main]
   schedule:
     - cron: '23 7 * * 1'
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   security-events: write
+
 jobs:
   supply-chain:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout full history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v6
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
-      - run: npm install --ignore-scripts
+      - name: Install
+        run: npm install --ignore-scripts
       - name: npm audit
         run: npm audit --audit-level=high
-      - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v3
+      - name: Gitleaks repository history
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Trivy repository scan
-        uses: aquasecurity/trivy-action@v0.36.0
+      - name: Trivy filesystem vulnerabilities and misconfigurations
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+      - name: Build production image
+        run: docker build -t whatsapp-ai:security .
+      - name: Trivy production image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: whatsapp-ai:security
+          scanners: vuln
           severity: HIGH,CRITICAL
           exit-code: '1'
           ignore-unfixed: true
