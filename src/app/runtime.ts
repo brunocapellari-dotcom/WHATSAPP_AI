@@ -27,11 +27,15 @@ export function buildRuntime(config: AppConfig) {
     idleTimeoutMillis: config.DATABASE_IDLE_TIMEOUT_MS,
     application_name: 'whatsapp-ai',
   });
+  const metrics = new Metrics();
+  const observeUsage = metrics.observeAi.bind(metrics);
   const messages = new PostgresMessageRepository(pool);
   const collectors = new PostgresCollectorResolver(pool);
   const quarantine = new EncryptedPostgresQuarantineStore(pool, config.APP_ENCRYPTION_KEY);
   const resolver = new CanonicalEntityResolver();
-  const llm = config.OPENAI_API_KEY ? new OpenAIStructuredModel({ apiKey: config.OPENAI_API_KEY, model: config.OPENAI_MODEL }) : undefined;
+  const llm = config.OPENAI_API_KEY
+    ? new OpenAIStructuredModel({ apiKey: config.OPENAI_API_KEY, model: config.OPENAI_MODEL, observeUsage })
+    : undefined;
   const freight = new FreightPipeline(messages, resolver, llm);
   const providers = new Map<string, WhatsAppProvider>();
   providers.set('meta-cloud', new MetaCloudProvider({
@@ -43,19 +47,32 @@ export function buildRuntime(config: AppConfig) {
   }));
   if (config.WPP_BASE_URL && config.WPP_API_TOKEN) {
     providers.set('wppconnect', new WppConnectProvider({
-      baseUrl: config.WPP_BASE_URL, apiToken: config.WPP_API_TOKEN, piiHmacKey: config.PII_HMAC_KEY, session: 'default',
+      baseUrl: config.WPP_BASE_URL,
+      apiToken: config.WPP_API_TOKEN,
+      piiHmacKey: config.PII_HMAC_KEY,
+      session: 'default',
     }));
   }
   const clamav = config.OPENAI_API_KEY ? new ClamAvScanner(config.CLAMAV_HOST, config.CLAMAV_PORT) : undefined;
   const media = config.OPENAI_API_KEY
-    ? { processor: new OpenAIMediaProcessor({ apiKey: config.OPENAI_API_KEY, model: config.OPENAI_MODEL, transcriptionModel: config.OPENAI_TRANSCRIPTION_MODEL }), scanner: clamav!, maxBytes: config.ATTACHMENT_MAX_BYTES }
+    ? {
+        processor: new OpenAIMediaProcessor({
+          apiKey: config.OPENAI_API_KEY,
+          model: config.OPENAI_MODEL,
+          transcriptionModel: config.OPENAI_TRANSCRIPTION_MODEL,
+          observeUsage,
+        }),
+        scanner: clamav!,
+        maxBytes: config.ATTACHMENT_MAX_BYTES,
+      }
     : undefined;
   const audit = new PostgresAuditSink(pool);
   const businessTools = buildPostgresBusinessTools(pool, config.PII_HMAC_KEY, audit);
-  const businessModel = config.OPENAI_API_KEY ? new OpenAIBusinessModel({ apiKey: config.OPENAI_API_KEY, model: config.OPENAI_MODEL }) : undefined;
+  const businessModel = config.OPENAI_API_KEY
+    ? new OpenAIBusinessModel({ apiKey: config.OPENAI_API_KEY, model: config.OPENAI_MODEL, observeUsage })
+    : undefined;
   const businessRuntime = new AgentRuntime(businessTools, businessModel);
   const business = new BusinessMessageService(businessRuntime);
   const ingestion = new IngestionService(collectors, providers, quarantine, messages, freight, media, business);
-  const metrics = new Metrics();
   return { pool, messages, collectors, quarantine, resolver, llm, freight, providers, ingestion, metrics, businessRuntime, clamav };
 }
