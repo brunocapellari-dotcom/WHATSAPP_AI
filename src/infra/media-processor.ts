@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import mammoth from 'mammoth';
 import type { ContentProcessor, DownloadedMedia } from '../domain/ports.js';
 import type { MessageType } from '../domain/schemas.js';
+import { responseUsageSample, type AiUsageObserver } from '../observability/ai-usage.js';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -10,17 +11,24 @@ const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingm
 export class OpenAIMediaProcessor implements ContentProcessor {
   private readonly client: OpenAI;
 
-  constructor(private readonly options: { apiKey: string; model: string; transcriptionModel?: string }) {
+  constructor(private readonly options: { apiKey: string; model: string; transcriptionModel?: string; observeUsage?: AiUsageObserver }) {
     this.client = new OpenAI({ apiKey: options.apiKey });
   }
 
   async extract(input: DownloadedMedia & { messageType: MessageType }): Promise<string> {
     if (input.mimeType.startsWith('audio/')) {
+      const model = this.options.transcriptionModel ?? 'gpt-transcribe';
       const file = await toFile(Buffer.from(input.bytes), input.fileName ?? 'audio.bin', { type: input.mimeType });
+      const startedAt = performance.now();
       const response = await this.client.audio.transcriptions.create({
         file,
-        model: this.options.transcriptionModel ?? 'gpt-transcribe',
+        model,
         language: 'pt',
+      });
+      this.options.observeUsage?.({
+        operation: 'media_transcription',
+        model,
+        latencySeconds: (performance.now() - startedAt) / 1000,
       });
       return response.text;
     }
@@ -72,11 +80,19 @@ export class OpenAIMediaProcessor implements ContentProcessor {
           { type: 'input_file' as const, filename: input.fileName ?? 'document.pdf', file_data: base64 },
         ];
 
+    const operation = input.mimeType.startsWith('image/') ? 'media_image_extract' : 'media_file_extract';
+    const startedAt = performance.now();
     const response = await this.client.responses.create({
       model: this.options.model,
       store: false,
       input: [{ role: 'user', content }],
     });
+    this.options.observeUsage?.(responseUsageSample({
+      operation,
+      model: this.options.model,
+      latencySeconds: (performance.now() - startedAt) / 1000,
+      usage: response.usage,
+    }));
     return response.output_text.slice(0, 200_000);
   }
 }
