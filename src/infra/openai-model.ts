@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import type { StructuredLanguageModel } from '../domain/ports.js';
 import type { FreightFields, TruthClass } from '../domain/schemas.js';
 import { emptyFreightFields, field } from '../freight/fields.js';
+import { responseUsageSample, type AiUsageObserver } from '../observability/ai-usage.js';
 
 const STRING_FIELDS = [
   'product','origin','destination','company','shipper','carrier','loadingPlace','unloadingPlace','freightUnit',
@@ -33,11 +34,22 @@ const freightSchema = {
 
 export class OpenAIStructuredModel implements StructuredLanguageModel {
   private readonly client: OpenAI;
-  constructor(private readonly options: { apiKey: string; model: string }) {
+
+  constructor(private readonly options: { apiKey: string; model: string; observeUsage?: AiUsageObserver }) {
     this.client = new OpenAI({ apiKey: options.apiKey });
   }
 
+  private observe(operation: string, startedAt: number, usage: Parameters<typeof responseUsageSample>[0]['usage']): void {
+    this.options.observeUsage?.(responseUsageSample({
+      operation,
+      model: this.options.model,
+      latencySeconds: (performance.now() - startedAt) / 1000,
+      usage,
+    }));
+  }
+
   async classifyRelevance(text: string) {
+    const startedAt = performance.now();
     const response = await this.client.responses.create({
       model: this.options.model,
       store: false,
@@ -49,10 +61,12 @@ export class OpenAIStructuredModel implements StructuredLanguageModel {
         required: ['relevant','confidence','reason'],
       } } },
     });
+    this.observe('freight_relevance', startedAt, response.usage);
     return JSON.parse(response.output_text) as { relevant: boolean; confidence: number; reason: string };
   }
 
   async extractFreight(text: string): Promise<Partial<FreightFields>> {
+    const startedAt = performance.now();
     const response = await this.client.responses.create({
       model: this.options.model,
       store: false,
@@ -64,6 +78,7 @@ export class OpenAIStructuredModel implements StructuredLanguageModel {
       input: text,
       text: { format: { type: 'json_schema', name: 'freight_extraction', strict: true, schema: freightSchema } },
     });
+    this.observe('freight_extraction', startedAt, response.usage);
     const parsed = JSON.parse(response.output_text) as Record<string, { value: string | number | null; truth: TruthClass; confidence: number; evidence: string | null }>;
     const out = emptyFreightFields();
     for (const name of STRING_FIELDS) {
