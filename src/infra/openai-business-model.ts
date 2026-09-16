@@ -1,9 +1,13 @@
 import OpenAI from 'openai';
 import type { BusinessDecisionModel, BusinessPlan } from '../domain/ports.js';
+import { responseUsageSample, type AiUsageObserver } from '../observability/ai-usage.js';
 
 export class OpenAIBusinessModel implements BusinessDecisionModel {
   private readonly client: OpenAI;
-  constructor(private readonly options: { apiKey: string; model: string }) { this.client = new OpenAI({ apiKey: options.apiKey }); }
+
+  constructor(private readonly options: { apiKey: string; model: string; observeUsage?: AiUsageObserver }) {
+    this.client = new OpenAI({ apiKey: options.apiKey });
+  }
 
   async plan(input: { message: string; tools: Array<{ name: string; description: string; risk: string }>; suspicious: boolean }): Promise<BusinessPlan> {
     const toolNames = input.tools.map((x) => x.name);
@@ -14,6 +18,7 @@ export class OpenAIBusinessModel implements BusinessDecisionModel {
         inputJson: { type: 'string', description: 'JSON object string with the tool arguments' },
       }, required: ['name','inputJson'],
     };
+    const startedAt = performance.now();
     const response = await this.client.responses.create({
       model: this.options.model,
       store: false,
@@ -37,6 +42,13 @@ export class OpenAIBusinessModel implements BusinessDecisionModel {
         }, required: ['role','reply','toolCalls','handoff','handoffReason'],
       } } },
     });
+    this.options.observeUsage?.(responseUsageSample({
+      operation: 'business_plan',
+      model: this.options.model,
+      latencySeconds: (performance.now() - startedAt) / 1000,
+      usage: response.usage,
+    }));
+
     const parsed = JSON.parse(response.output_text) as Omit<BusinessPlan, 'toolCalls'> & { toolCalls: Array<{ name: string; inputJson: string }> };
     return {
       ...parsed,
