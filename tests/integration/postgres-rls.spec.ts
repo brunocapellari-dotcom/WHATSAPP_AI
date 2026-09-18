@@ -48,4 +48,45 @@ run('PostgreSQL tenant isolation', () => {
     const outboxOther = await withTenant(app, 'tenant-b', (client) => client.query(`SELECT outbox_id FROM outbox_events WHERE outbox_id=$1`, [outboxId]));
     expect(outboxOther.rowCount).toBe(0);
   });
+
+  it('shares global canonical entities but isolates tenant-specific aliases', async () => {
+    const suffix = randomUUID();
+    const globalId = `company:global:${suffix}`;
+    const tenantAId = `company:tenant-a:${suffix}`;
+    const tenantBId = `company:tenant-b:${suffix}`;
+
+    await admin.query(
+      `INSERT INTO canonical_entities(entity_id,tenant_id,entity_type,canonical_name,aliases,confidence)
+       VALUES
+         ($1,NULL,'COMPANY','Global Entity',ARRAY[$4],1),
+         ($2,'tenant-a','COMPANY','Tenant A Entity',ARRAY[$4],1),
+         ($3,'tenant-b','COMPANY','Tenant B Entity',ARRAY[$4],1)`,
+      [globalId, tenantAId, tenantBId, `RLS-ALIAS-${suffix}`],
+    );
+
+    try {
+      const noContext = await app.query(
+        `SELECT entity_id FROM canonical_entities WHERE entity_id = ANY($1::text[]) ORDER BY entity_id`,
+        [[globalId, tenantAId, tenantBId]],
+      );
+      expect(noContext.rows.map((row) => row.entity_id)).toEqual([globalId]);
+
+      const tenantA = await withTenant(app, 'tenant-a', (client) => client.query(
+        `SELECT entity_id FROM canonical_entities WHERE entity_id = ANY($1::text[]) ORDER BY entity_id`,
+        [[globalId, tenantAId, tenantBId]],
+      ));
+      expect(new Set(tenantA.rows.map((row) => row.entity_id))).toEqual(new Set([globalId, tenantAId]));
+
+      const tenantB = await withTenant(app, 'tenant-b', (client) => client.query(
+        `SELECT entity_id FROM canonical_entities WHERE entity_id = ANY($1::text[]) ORDER BY entity_id`,
+        [[globalId, tenantAId, tenantBId]],
+      ));
+      expect(new Set(tenantB.rows.map((row) => row.entity_id))).toEqual(new Set([globalId, tenantBId]));
+    } finally {
+      await admin.query(
+        `DELETE FROM canonical_entities WHERE entity_id = ANY($1::text[])`,
+        [[globalId, tenantAId, tenantBId]],
+      );
+    }
+  });
 });
