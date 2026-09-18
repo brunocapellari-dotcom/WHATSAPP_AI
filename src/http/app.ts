@@ -184,7 +184,7 @@ export async function buildHttpApp(input: {
       });
       input.metrics.webhookIngress.inc({
         provider: 'wppconnect',
-        outcome: queued.status === 200 ? (queued.body.queued ? 'queued' : 'duplicate') : 'rejected',
+        outcome: queued.outcome,
       });
       return reply.code(queued.status).send(queued.body);
     } catch (error) {
