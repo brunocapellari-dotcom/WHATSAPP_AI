@@ -4,7 +4,7 @@ import { buildHttpApp } from './http/app.js';
 
 const config = loadConfig();
 const runtime = buildRuntime(config);
-const app = await buildHttpApp({ config, ingestion: runtime.ingestion, collectors: runtime.collectors, providers: runtime.providers, metrics: runtime.metrics, pool: runtime.pool, clamav: runtime.clamav });
+const app = await buildHttpApp({ config, collectors: runtime.collectors, providers: runtime.providers, webhookInbox: runtime.webhookInbox, metrics: runtime.metrics, pool: runtime.pool, clamav: runtime.clamav });
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, 'shutting down');
