@@ -65,6 +65,12 @@ export class MemoryBusinessRunStore implements BusinessRunStore {
     row.sendAttempts++;
   }
 
+  async markNoSendCompleted(_tenantId: string, runId: string) {
+    const row = [...this.rows.values()].find((candidate) => candidate.runId === runId);
+    if (!row || row.state !== 'PENDING_SEND') throw new Error('business_run_no_send_transition_failed');
+    row.state = 'SENT';
+  }
+
   async markSent(_tenantId: string, runId: string, replyMessageId?: string) {
     const row = [...this.rows.values()].find((candidate) => candidate.runId === runId);
     if (!row || row.state !== 'SENDING') throw new Error('business_run_not_found');
@@ -218,6 +224,22 @@ export class PostgresBusinessRunStore implements BusinessRunStore {
       [tenantId, runId],
     );
     if (updated.rowCount !== 1) throw new Error('business_run_begin_send_failed');
+  }
+
+  async markNoSendCompleted(tenantId: string, runId: string): Promise<void> {
+    const updated = await tenantQuery(
+      this.pool,
+      tenantId,
+      `UPDATE business_message_runs
+       SET state='SENT',
+           reply_message_id=NULL,
+           last_error=NULL,
+           send_started_at=NULL,
+           updated_at=now()
+       WHERE tenant_id=$1 AND run_id=$2 AND state='PENDING_SEND'`,
+      [tenantId, runId],
+    );
+    if (updated.rowCount !== 1) throw new Error('business_run_no_send_transition_failed');
   }
 
   async markSent(tenantId: string, runId: string, replyMessageId?: string): Promise<void> {
