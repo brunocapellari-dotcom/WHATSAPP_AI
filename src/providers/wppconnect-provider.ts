@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { WhatsAppProvider } from '../domain/ports.js';
 import { RawMessageSchema, type ProviderCapabilities } from '../domain/schemas.js';
 import { pseudonymize, sha256 } from '../security/crypto.js';
+import { readResponseBytesLimited } from '../security/download.js';
 
 export class WppConnectProvider implements WhatsAppProvider {
   readonly id = 'wppconnect';
@@ -85,7 +86,7 @@ export class WppConnectProvider implements WhatsAppProvider {
     })];
   }
 
-  async downloadMedia(reference: string) {
+  async downloadMedia(reference: string, options?: { maxBytes: number }) {
     const response = await fetch(
       `${this.options.baseUrl.replace(/\/$/, '')}/api/${encodeURIComponent(this.options.session)}/download-media`,
       {
@@ -98,14 +99,19 @@ export class WppConnectProvider implements WhatsAppProvider {
       },
     );
     if (!response.ok) throw new Error(`wpp_media_download_failed:${response.status}`);
-    const body = await response.json() as Record<string, unknown>;
+    const maxBytes = options?.maxBytes ?? 25 * 1024 * 1024;
+    const encodedLimit = Math.ceil(maxBytes * 4 / 3) + 512 * 1024;
+    const responseBytes = await readResponseBytesLimited(response, encodedLimit);
+    const body = JSON.parse(new TextDecoder().decode(responseBytes)) as Record<string, unknown>;
     const base64 = String(body.base64 ?? body.data ?? body.result ?? '');
     const match = base64.match(/^data:([^;]+);base64,(.+)$/s);
     const mimeType = match?.[1] ?? String(body.mimetype ?? body.mimeType ?? 'application/octet-stream');
     const payload = match?.[2] ?? base64;
     if (!payload) throw new Error('wpp_media_missing_payload');
+    const decoded = new Uint8Array(Buffer.from(payload, 'base64'));
+    if (decoded.byteLength > maxBytes) throw new Error('file_too_large');
     return {
-      bytes: new Uint8Array(Buffer.from(payload, 'base64')),
+      bytes: decoded,
       mimeType,
       ...(body.filename ? { fileName: String(body.filename) } : {}),
     };
