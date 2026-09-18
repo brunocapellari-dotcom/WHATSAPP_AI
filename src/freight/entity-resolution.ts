@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import type { EntityResolver } from '../domain/ports.js';
 import { sha256 } from '../security/crypto.js';
+import { tenantQuery } from '../infra/tenant-db.js';
 
 export function normalizeEntityText(value: string): string {
   return value
@@ -107,16 +108,18 @@ export class PostgresEntityResolver implements EntityResolver {
     const alias = normalizeEntityText(value);
     if (!alias) return null;
 
-    const result = await this.pool.query<CatalogRow>(
-      `SELECT entity_id,canonical_name,tenant_id,confidence
+    const sql = `SELECT entity_id,canonical_name,tenant_id,confidence
        FROM canonical_entities
        WHERE entity_type=$1
          AND (tenant_id IS NULL OR tenant_id=$2)
          AND aliases @> ARRAY[$3]::text[]
        ORDER BY (tenant_id IS NOT NULL) DESC, confidence DESC, canonical_name
-       LIMIT 4`,
-      [entityType, tenantId ?? null, alias],
-    );
+       LIMIT 4`;
+    const values = [entityType, tenantId ?? null, alias];
+
+    const result = tenantId
+      ? await tenantQuery<CatalogRow>(this.pool, tenantId, sql, values)
+      : await this.pool.query<CatalogRow>(sql, values);
 
     if (result.rows.length === 0) return null;
 
