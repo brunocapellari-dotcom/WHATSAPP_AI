@@ -112,7 +112,18 @@ export class IngestionService {
       const save = await this.messages.saveRaw(message);
       if (save === 'duplicate') {
         await this.quarantine.mark(message, 'DISCARDED');
-        results.push({ message, disposition: 'DUPLICATE' });
+
+        if (collector.purpose === 'BUSINESS' && this.business) {
+          const handled = await this.business.handle(message, provider);
+          results.push({
+            message,
+            disposition: 'DUPLICATE',
+            ...(handled.replyMessageId ? { replyMessageId: handled.replyMessageId } : {}),
+            handoff: handled.handoff,
+          });
+        } else {
+          results.push({ message, disposition: 'DUPLICATE' });
+        }
         continue;
       }
 
