@@ -83,8 +83,8 @@ export class PostgresEntityResolver implements EntityResolver {
   constructor(private readonly pool: Pool) {}
 
   async resolveCity(value: string | null, tenantId?: string) {
-    return this.resolveFromCatalog('CITY', value, tenantId)
-      ?? this.fallback.resolveCity(value, tenantId);
+    const catalog = await this.resolveFromCatalog('CITY', value, tenantId);
+    return catalog ?? this.fallback.resolveCity(value, tenantId);
   }
 
   async resolveCompany(value: string | null, tenantId?: string) {
@@ -94,8 +94,8 @@ export class PostgresEntityResolver implements EntityResolver {
   }
 
   async resolveProduct(value: string | null, tenantId?: string) {
-    return this.resolveFromCatalog('PRODUCT', value, tenantId)
-      ?? this.fallback.resolveProduct(value, tenantId);
+    const catalog = await this.resolveFromCatalog('PRODUCT', value, tenantId);
+    return catalog ?? this.fallback.resolveProduct(value, tenantId);
   }
 
   private async resolveFromCatalog(
