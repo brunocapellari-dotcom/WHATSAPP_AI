@@ -12,19 +12,21 @@ import { constantTimeEquals, hmacSha256 } from '../security/crypto.js';
 import { verifyMetaSignature, verifyWebhookChallenge } from '../security/webhook.js';
 import { internalApiAuth } from './auth.js';
 
+type QueueInboundResult = { status: number; outcome: 'queued' | 'duplicate' | 'rejected'; body: Record<string, unknown> };
+
 async function queueInboundWebhook(input: {
   providerId: string;
   collectorId: string;
   rawBody: Buffer;
   collectors: CollectorResolver;
   inbox: WebhookInbox;
-}) {
+}): Promise<QueueInboundResult> {
   const collector = await input.collectors.resolve(input.collectorId);
   if (!collector || collector.provider !== input.providerId) {
-    return { status: 404, body: { error: 'collector_not_found' } };
+    return { status: 404, outcome: 'rejected', body: { error: 'collector_not_found' } };
   }
   if (collector.status === 'DISABLED') {
-    return { status: 403, body: { error: 'collector_disabled' } };
+    return { status: 403, outcome: 'rejected', body: { error: 'collector_disabled' } };
   }
 
   const accepted = await input.inbox.accept({
@@ -36,6 +38,7 @@ async function queueInboundWebhook(input: {
 
   return {
     status: 200,
+    outcome: accepted.inserted ? 'queued' : 'duplicate',
     body: {
       accepted: true,
       queued: accepted.inserted,
@@ -146,7 +149,7 @@ export async function buildHttpApp(input: {
       });
       input.metrics.webhookIngress.inc({
         provider: 'meta-cloud',
-        outcome: queued.status === 200 ? (queued.body.queued ? 'queued' : 'duplicate') : 'rejected',
+        outcome: queued.outcome,
       });
       return reply.code(queued.status).send(queued.body);
     } catch (error) {
