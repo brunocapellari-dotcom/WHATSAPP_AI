@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { WhatsAppProvider } from '../domain/ports.js';
 import { RawMessageSchema, type ProviderCapabilities, type RawMessage } from '../domain/schemas.js';
 import { pseudonymize, sha256 } from '../security/crypto.js';
+import { readResponseBytesLimited } from '../security/download.js';
+import { assertSafeHttpUrl } from '../security/safe-url.js';
 
 type MetaProviderOptions = {
   accessToken?: string;
@@ -133,7 +135,7 @@ export class MetaCloudProvider implements WhatsAppProvider {
     return output;
   }
 
-  async downloadMedia(reference: string) {
+  async downloadMedia(reference: string, options?: { maxBytes: number }) {
     if (!this.options.accessToken) throw new Error('meta_provider_not_configured');
     const meta = await fetch(
       `https://graph.facebook.com/${this.graphVersion}/${encodeURIComponent(reference)}`,
@@ -143,12 +145,13 @@ export class MetaCloudProvider implements WhatsAppProvider {
     const info = await meta.json() as { url?: string; mime_type?: string };
     if (!info.url) throw new Error('meta_media_missing_url');
 
-    const file = await fetch(info.url, {
+    const safeUrl = await assertSafeHttpUrl(info.url);
+    const file = await fetch(safeUrl, {
       headers: { Authorization: `Bearer ${this.options.accessToken}` },
       redirect: 'error',
     });
     if (!file.ok) throw new Error(`meta_media_download_failed:${file.status}`);
-    const bytes = new Uint8Array(await file.arrayBuffer());
+    const bytes = await readResponseBytesLimited(file, options?.maxBytes ?? 25 * 1024 * 1024);
     return {
       bytes,
       mimeType: info.mime_type ?? file.headers.get('content-type') ?? 'application/octet-stream',
