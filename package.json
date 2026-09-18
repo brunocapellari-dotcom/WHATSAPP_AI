@@ -14,7 +14,8 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "format": "biome format --write .",
     "lint": "biome check .",
-    "bootstrap": "tsx scripts/bootstrap.ts"
+    "bootstrap": "tsx scripts/bootstrap.ts",
+    "data:sync:ibge": "tsx scripts/sync-ibge-municipalities.ts"
   },
   "keywords": [],
   "author": "",
