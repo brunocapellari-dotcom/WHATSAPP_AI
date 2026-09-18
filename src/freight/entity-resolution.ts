@@ -35,7 +35,7 @@ const productAliases: Record<string, string> = {
 };
 
 export class CanonicalEntityResolver implements EntityResolver {
-  async resolveCity(value: string | null) {
+  async resolveCity(value: string | null, _tenantId?: string) {
     if (!value) return null;
     const normalized = normalizeEntityText(value);
     const canonicalName = cityAliases[normalized] ?? normalized;
@@ -45,7 +45,7 @@ export class CanonicalEntityResolver implements EntityResolver {
     };
   }
 
-  async resolveCompany(value: string | null) {
+  async resolveCompany(value: string | null, _tenantId?: string) {
     if (!value) return null;
     const canonicalName = normalizeEntityText(value)
       .replace(/\b(?:LTDA|S A|SA|EIRELI)\b/g, '')
@@ -57,7 +57,7 @@ export class CanonicalEntityResolver implements EntityResolver {
     };
   }
 
-  async resolveProduct(value: string | null) {
+  async resolveProduct(value: string | null, _tenantId?: string) {
     if (!value) return null;
     const normalized = normalizeEntityText(value);
     const canonicalName = productAliases[normalized] ?? normalized;
