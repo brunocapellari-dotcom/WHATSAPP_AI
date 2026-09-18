@@ -11,6 +11,7 @@ export type WebhookInboxItem = {
   provider: string;
   collectorId: string;
   attempts: number;
+  lockToken: string;
   payload: unknown;
 };
 
@@ -75,6 +76,7 @@ export class WebhookInbox {
       provider: string;
       collector_id: string;
       attempts: number;
+      lock_token: string;
       encrypted_payload: Buffer;
     }>(
       `WITH candidates AS (
@@ -97,7 +99,7 @@ export class WebhookInbox {
        FROM candidates c
        WHERE w.ingress_id=c.ingress_id
        RETURNING
-         w.ingress_id,w.tenant_id,w.provider,w.collector_id,w.attempts,w.encrypted_payload`,
+         w.ingress_id,w.tenant_id,w.provider,w.collector_id,w.attempts,w.lock_token,w.encrypted_payload`,
       [limit, lockToken],
     );
 
@@ -110,13 +112,14 @@ export class WebhookInbox {
         provider: row.provider,
         collectorId: row.collector_id,
         attempts: row.attempts,
+        lockToken: row.lock_token,
         payload: JSON.parse(raw) as unknown,
       };
     });
   }
 
-  async complete(ingressId: string): Promise<void> {
-    await this.pool.query(
+  async complete(ingressId: string, lockToken: string): Promise<boolean> {
+    const result = await this.pool.query(
       `UPDATE webhook_inbox
        SET state='DONE',
            processed_at=now(),
@@ -124,33 +127,41 @@ export class WebhookInbox {
            lock_token=NULL,
            last_error=NULL,
            updated_at=now()
-       WHERE ingress_id=$1 AND state='PROCESSING'`,
-      [ingressId],
+       WHERE ingress_id=$1 AND state='PROCESSING' AND lock_token=$2`,
+      [ingressId, lockToken],
     );
+    return result.rowCount === 1;
   }
 
-  async fail(ingressId: string, attempts: number, error: string): Promise<void> {
+  async fail(
+    ingressId: string,
+    lockToken: string,
+    attempts: number,
+    error: string,
+  ): Promise<boolean> {
     const terminal = attempts >= 8;
     const delaySeconds = Math.min(3600, 2 ** Math.min(attempts, 10));
-    await this.pool.query(
+    const result = await this.pool.query(
       `UPDATE webhook_inbox
-       SET state=$2,
-           next_attempt_at=CASE WHEN $2='RECEIVED'
-             THEN now()+($4 || ' seconds')::interval
+       SET state=$3,
+           next_attempt_at=CASE WHEN $3='RECEIVED'
+             THEN now()+($5 || ' seconds')::interval
              ELSE next_attempt_at
            END,
            locked_at=NULL,
            lock_token=NULL,
-           last_error=$3,
+           last_error=$4,
            updated_at=now()
-       WHERE ingress_id=$1 AND state='PROCESSING'`,
+       WHERE ingress_id=$1 AND state='PROCESSING' AND lock_token=$2`,
       [
         ingressId,
+        lockToken,
         terminal ? 'FAILED' : 'RECEIVED',
         error.slice(0, 1000),
         delaySeconds,
       ],
     );
+    return result.rowCount === 1;
   }
 
   async purgeExpired(now: Date = new Date()): Promise<number> {
