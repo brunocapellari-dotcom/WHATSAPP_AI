@@ -5,6 +5,40 @@ import { pseudonymize, sha256 } from '../security/crypto.js';
 import { readResponseBytesLimited } from '../security/download.js';
 import { ProviderSendError } from './errors.js';
 
+function serializedId(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (!value || typeof value !== 'object') return null;
+  const row = value as Record<string, unknown>;
+  for (const key of ['_serialized', 'serialized', 'messageId']) {
+    const found = serializedId(row[key]);
+    if (found) return found;
+  }
+  if (typeof row.id === 'string') return row.id.trim() || null;
+  if (row.id && typeof row.id === 'object') {
+    const nested = row.id as Record<string, unknown>;
+    const serialized = serializedId(nested._serialized ?? nested.serialized);
+    if (serialized) return serialized;
+  }
+  return null;
+}
+
+function extractSendMessageId(payload: Record<string, unknown>): string | null {
+  const direct = serializedId(payload.messageId) ?? serializedId(payload.id);
+  if (direct) return direct;
+
+  const response = payload.response;
+  if (Array.isArray(response)) {
+    for (const item of response) {
+      const found = serializedId(item);
+      if (found) return found;
+    }
+  }
+  return serializedId(response);
+}
+
 export class WppConnectProvider implements WhatsAppProvider {
   readonly id = 'wppconnect';
   readonly capabilities: ProviderCapabilities = {
@@ -12,11 +46,11 @@ export class WppConnectProvider implements WhatsAppProvider {
     send: true,
     media: true,
     templates: false,
-    managedGroups: true,
+    managedGroups: false,
     existingGroups: true,
-    historySync: true,
-    receipts: true,
-    reactions: true,
+    historySync: false,
+    receipts: false,
+    reactions: false,
   };
 
   constructor(
@@ -29,6 +63,7 @@ export class WppConnectProvider implements WhatsAppProvider {
   ) {}
 
   async sendText(input: { tenantId: string; to: string; text: string }) {
+    const isGroup = input.to.endsWith('@g.us');
     let response: Response;
     try {
       response = await fetch(
@@ -39,7 +74,11 @@ export class WppConnectProvider implements WhatsAppProvider {
             Authorization: `Bearer ${this.options.apiToken}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ phone: input.to, message: input.text }),
+          body: JSON.stringify({
+            phone: input.to,
+            isGroup,
+            message: input.text,
+          }),
           signal: AbortSignal.timeout(15_000),
         },
       );
@@ -52,7 +91,7 @@ export class WppConnectProvider implements WhatsAppProvider {
     }
 
     const data = await response.json() as Record<string, unknown>;
-    const messageId = String(data.id ?? data.messageId ?? '').trim();
+    const messageId = extractSendMessageId(data);
     if (!messageId) {
       throw new ProviderSendError('wpp_send_missing_message_id', true);
     }
@@ -62,21 +101,28 @@ export class WppConnectProvider implements WhatsAppProvider {
   async normalizeInbound(input: unknown, context: { tenantId: string; collectorId: string }) {
     const body = input as Record<string, unknown>;
     const data = (body.data ?? body) as Record<string, unknown>;
-    const from = String(data.from ?? data.sender ?? 'unknown');
-    const providerMessageId = String(data.id ?? data.messageId ?? '').trim();
+    const event = String(data.event ?? body.event ?? 'onmessage').toLowerCase();
+
+    if (!['onmessage', 'unreadmessages'].includes(event)) return [];
+
+    const from = serializedId(data.from ?? data.sender) ?? 'unknown';
+    const providerMessageId = serializedId(data.id) ?? serializedId(data.messageId);
     const messageId = providerMessageId || `synthetic:${sha256(JSON.stringify(data)).slice(0, 48)}`;
-    const routingChatId = String(data.chatId ?? data.from ?? 'unknown');
+    const routingChatId = serializedId(data.chatId) ?? from;
     const isGroup = routingChatId.endsWith('@g.us') || Boolean(data.isGroupMsg);
     const chatReference = pseudonymize(routingChatId, this.options.piiHmacKey);
     const groupReference = isGroup ? chatReference : null;
     const text = String(data.body ?? data.content ?? '').trim() || null;
-    const messageType = data.type === 'image'
+    const type = String(data.type ?? 'chat').toLowerCase();
+    const messageType = type === 'image'
       ? 'image'
-      : data.type === 'audio' || data.type === 'ptt'
+      : type === 'audio' || type === 'ptt'
         ? 'audio'
-        : data.type === 'document'
+        : type === 'document'
           ? 'document'
           : 'text';
+    const hasMedia = Boolean(data.isMedia || data.isMMS || data.mimetype)
+      || ['image', 'audio', 'ptt', 'document', 'video'].includes(type);
 
     return [RawMessageSchema.parse({
       eventId: randomUUID(),
@@ -93,9 +139,9 @@ export class WppConnectProvider implements WhatsAppProvider {
       routingAddress: isGroup ? routingChatId : from,
       messageType,
       text,
-      attachmentReference: data.mediaId ? String(data.mediaId) : null,
+      attachmentReference: hasMedia ? messageId : null,
       replyContext: null,
-      contentHash: sha256(JSON.stringify({ messageId, from, text, type: data.type })),
+      contentHash: sha256(JSON.stringify({ messageId, from, text, type })),
       sourcePayload: data,
       schemaVersion: 1,
     })];
@@ -135,8 +181,7 @@ export class WppConnectProvider implements WhatsAppProvider {
 
   async health() {
     try {
-      const response = await fetch(`${this.options.baseUrl.replace(/\/$/, '')}/health`, {
-        headers: { Authorization: `Bearer ${this.options.apiToken}` },
+      const response = await fetch(`${this.options.baseUrl.replace(/\/$/, '')}/healthz`, {
         signal: AbortSignal.timeout(5_000),
       });
       return { ok: response.ok, details: { status: response.status } };
