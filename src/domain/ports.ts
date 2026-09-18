@@ -20,12 +20,17 @@ export type BusinessRunClaim=
   | {state:'NEW';runId:string}
   | {state:'PROCESSING';runId:string}
   | {state:'PENDING_SEND';runId:string;result:BusinessRunResult}
+  | {state:'SENDING';runId:string}
   | {state:'SENT';runId:string;result:BusinessRunResult;replyMessageId?:string}
-  | {state:'FAILED';runId:string};
+  | {state:'FAILED';runId:string}
+  | {state:'DELIVERY_UNCERTAIN';runId:string};
 export interface BusinessRunStore {
   claim(message:RawMessage,conversationId:string):Promise<BusinessRunClaim>;
   completeProcessing(tenantId:string,runId:string,result:BusinessRunResult):Promise<void>;
+  beginSend(tenantId:string,runId:string):Promise<void>;
   markSent(tenantId:string,runId:string,replyMessageId?:string):Promise<void>;
+  markSendRetryable(tenantId:string,runId:string,error:string):Promise<void>;
+  markDeliveryUncertain(tenantId:string,runId:string,error:string):Promise<void>;
   markFailed(tenantId:string,runId:string,error:string):Promise<void>;
 }
 export interface BusinessMessageHandler { handle(message:RawMessage,provider:WhatsAppProvider):Promise<{reply:string;handoff:boolean;replyMessageId?:string;conversationId?:string}>; }
