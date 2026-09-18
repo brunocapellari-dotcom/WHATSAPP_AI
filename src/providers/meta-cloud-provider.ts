@@ -80,7 +80,9 @@ export class MetaCloudProvider implements WhatsAppProvider {
             : null;
           const from = String(message.from ?? 'unknown');
           const chat = (message.chat ?? {}) as Record<string, unknown>;
-          const groupId = String(chat.id ?? message.group_id ?? '').trim() || null;
+          const routingGroupId = String(chat.id ?? message.group_id ?? '').trim() || null;
+          const chatReference = pseudonymize(routingGroupId ?? from, this.options.piiHmacKey);
+          const groupReference = routingGroupId ? pseudonymize(routingGroupId, this.options.piiHmacKey) : null;
           const providerMessageId = String(message.id ?? '').trim();
           const messageId = providerMessageId || `synthetic:${sha256(JSON.stringify({
             entryId: entry.id ?? null,
@@ -110,12 +112,12 @@ export class MetaCloudProvider implements WhatsAppProvider {
             collectorId: context.collectorId,
             accountId: String(metadata.phone_number_id ?? entry.id ?? 'unknown'),
             messageId,
-            chatId: groupId ?? from,
-            groupId,
+            chatId: chatReference,
+            groupId: groupReference,
             occurredAt: timestamp,
             receivedAt: new Date(),
             senderReference: pseudonymize(from, this.options.piiHmacKey),
-            routingAddress: groupId ? `group:${groupId}` : from,
+            routingAddress: routingGroupId ? `group:${routingGroupId}` : from,
             messageType: mappedType,
             text,
             attachmentReference: attachmentId,
