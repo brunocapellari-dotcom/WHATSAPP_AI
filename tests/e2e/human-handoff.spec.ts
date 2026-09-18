@@ -8,6 +8,7 @@ import { FreightPipeline } from '../../src/freight/pipeline.js';
 import { CanonicalEntityResolver } from '../../src/freight/entity-resolution.js';
 import { MemoryAuditSink } from '../../src/infra/audit.js';
 import { MemoryCollectorResolver } from '../../src/infra/collectors.js';
+import { MemoryBusinessRunStore } from '../../src/infra/business-runs.js';
 import { MemoryConversationStore } from '../../src/infra/conversations.js';
 import { MemoryMessageRepository } from '../../src/infra/memory-repository.js';
 import { MemoryQuarantineStore } from '../../src/infra/quarantine.js';
@@ -56,6 +57,7 @@ describe('Business AI human handoff', () => {
     const business = new BusinessMessageService(
       new AgentRuntime(tools, new HandoffModel()),
       conversations,
+      new MemoryBusinessRunStore(),
     );
     const ingestion = new IngestionService(
       collectors,
