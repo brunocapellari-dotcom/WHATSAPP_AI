@@ -1,8 +1,8 @@
-import { randomUUID } from 'node:crypto';
 import type { WhatsAppProvider } from '../domain/ports.js';
 import { RawMessageSchema, type ProviderCapabilities } from '../domain/schemas.js';
 import { pseudonymize, sha256 } from '../security/crypto.js';
 import { readResponseBytesLimited } from '../security/download.js';
+import { ProviderSendError } from './errors.js';
 
 export class WppConnectProvider implements WhatsAppProvider {
   readonly id = 'wppconnect';
@@ -28,20 +28,34 @@ export class WppConnectProvider implements WhatsAppProvider {
   ) {}
 
   async sendText(input: { tenantId: string; to: string; text: string }) {
-    const response = await fetch(
-      `${this.options.baseUrl.replace(/\/$/, '')}/api/${encodeURIComponent(this.options.session)}/send-message`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.options.apiToken}`,
-          'Content-Type': 'application/json',
+    let response: Response;
+    try {
+      response = await fetch(
+        `${this.options.baseUrl.replace(/\/$/, '')}/api/${encodeURIComponent(this.options.session)}/send-message`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.options.apiToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ phone: input.to, message: input.text }),
+          signal: AbortSignal.timeout(15_000),
         },
-        body: JSON.stringify({ phone: input.to, message: input.text }),
-      },
-    );
-    if (!response.ok) throw new Error(`wpp_send_failed:${response.status}`);
+      );
+    } catch (cause) {
+      throw new ProviderSendError('wpp_send_transport_failure', true, { cause });
+    }
+
+    if (!response.ok) {
+      throw new ProviderSendError(`wpp_send_failed:${response.status}`, false);
+    }
+
     const data = await response.json() as Record<string, unknown>;
-    return { messageId: String(data.id ?? data.messageId ?? randomUUID()) };
+    const messageId = String(data.id ?? data.messageId ?? '').trim();
+    if (!messageId) {
+      throw new ProviderSendError('wpp_send_missing_message_id', true);
+    }
+    return { messageId };
   }
 
   async normalizeInbound(input: unknown, context: { tenantId: string; collectorId: string }) {
@@ -64,7 +78,7 @@ export class WppConnectProvider implements WhatsAppProvider {
           : 'text';
 
     return [RawMessageSchema.parse({
-      eventId: randomUUID(),
+      eventId: crypto.randomUUID(),
       tenantId: context.tenantId,
       provider: this.id,
       collectorId: context.collectorId,
@@ -96,6 +110,7 @@ export class WppConnectProvider implements WhatsAppProvider {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ messageId: reference }),
+        signal: AbortSignal.timeout(30_000),
       },
     );
     if (!response.ok) throw new Error(`wpp_media_download_failed:${response.status}`);
@@ -121,6 +136,7 @@ export class WppConnectProvider implements WhatsAppProvider {
     try {
       const response = await fetch(`${this.options.baseUrl.replace(/\/$/, '')}/health`, {
         headers: { Authorization: `Bearer ${this.options.apiToken}` },
+        signal: AbortSignal.timeout(5_000),
       });
       return { ok: response.ok, details: { status: response.status } };
     } catch (error) {
