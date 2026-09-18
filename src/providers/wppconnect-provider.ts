@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { WhatsAppProvider } from '../domain/ports.js';
 import { RawMessageSchema, type ProviderCapabilities } from '../domain/schemas.js';
 import { pseudonymize, sha256 } from '../security/crypto.js';
@@ -78,7 +79,7 @@ export class WppConnectProvider implements WhatsAppProvider {
           : 'text';
 
     return [RawMessageSchema.parse({
-      eventId: crypto.randomUUID(),
+      eventId: randomUUID(),
       tenantId: context.tenantId,
       provider: this.id,
       collectorId: context.collectorId,
