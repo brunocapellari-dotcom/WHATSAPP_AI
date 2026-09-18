@@ -5,6 +5,7 @@ export class Metrics {
   readonly registry = new Registry();
   readonly messages = new Counter({ name: 'whatsapp_ai_messages_total', help: 'Processed inbound messages', labelNames: ['provider','disposition'], registers: [this.registry] });
   readonly webhookIngress = new Counter({ name: 'whatsapp_ai_webhook_ingress_total', help: 'Authenticated webhook envelopes accepted into durable inbox', labelNames: ['provider','outcome'], registers: [this.registry] });
+  readonly reconciliationMessages = new Counter({ name: 'whatsapp_ai_reconciliation_messages_total', help: 'Messages observed by provider reconciliation', labelNames: ['provider','outcome'], registers: [this.registry] });
   readonly failures = new Counter({ name: 'whatsapp_ai_failures_total', help: 'Failures', labelNames: ['component'], registers: [this.registry] });
   readonly aiRequests = new Counter({ name: 'whatsapp_ai_ai_requests_total', help: 'AI requests', labelNames: ['operation','model'], registers: [this.registry] });
   readonly aiLatency = new Histogram({ name: 'whatsapp_ai_ai_latency_seconds', help: 'AI request latency', labelNames: ['operation','model'], registers: [this.registry] });
