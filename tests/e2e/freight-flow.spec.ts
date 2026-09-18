@@ -89,14 +89,24 @@ describe('Freight Intelligence end to end', () => {
     expect([...quarantine.rows.values()][0]?.disposition).toBe('DISCARDED');
   });
 
-  it('is idempotent for the same provider message id', async () => {
+  it('is idempotent for the same provider message id even when replay reaches the domain pipeline', async () => {
     const { repo, service } = fixture();
     const payload = { messageId: 'same-id', chatId: 'g1', groupId: 'g1', text: 'SOJA\nOrigem: Sinop/MT\nDestino: Rondonópolis/MT\nFrete R$ 180,00' };
-    await service.ingest('mock', 'freight-1', payload);
+    const first = await service.ingest('mock', 'freight-1', payload);
+    const firstEventId = first[0]?.freightEventId;
     const duplicate = await service.ingest('mock', 'freight-1', payload);
+
     expect(duplicate[0]?.disposition).toBe('DUPLICATE');
+    expect(duplicate[0]?.freightEventId).toBe(firstEventId);
     expect(repo.raw.size).toBe(1);
     expect(repo.observations.size).toBe(1);
+    expect(repo.freightEvents.size).toBe(1);
+
+    const event = [...repo.freightEvents.values()][0]!;
+    expect(event.duplicateCount).toBe(0);
+    expect(event.observationIds).toHaveLength(1);
+    expect(repo.outbox.filter((x) => x.topic === 'agrolog.freight_observation.v1')).toHaveLength(1);
+    expect(repo.outbox.filter((x) => x.topic === 'agrolog.freight_event.v1')).toHaveLength(1);
   });
 
   it('keeps tenant deduplication isolated', async () => {
