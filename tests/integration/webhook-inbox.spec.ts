@@ -44,7 +44,8 @@ run('durable webhook inbox', () => {
     const claimed = await inbox.claimBatch(100);
     const item = claimed.find((candidate) => candidate.ingressId === first.ingressId);
     expect(item?.payload).toEqual(JSON.parse(raw.toString('utf8')));
-    await inbox.fail(first.ingressId, item?.attempts ?? 1, 'temporary');
+    expect(item).toBeTruthy();
+    expect(await inbox.fail(first.ingressId, item!.lockToken, item!.attempts, 'temporary')).toBe(true);
     const failedState = await pool.query('SELECT state,last_error FROM webhook_inbox WHERE ingress_id=$1', [first.ingressId]);
     expect(failedState.rows[0].state).toBe('RECEIVED');
     expect(failedState.rows[0].last_error).toBe('temporary');
@@ -52,7 +53,15 @@ run('durable webhook inbox', () => {
     const reclaimed = await inbox.claimBatch(100);
     const retry = reclaimed.find((candidate) => candidate.ingressId === first.ingressId);
     expect(retry).toBeTruthy();
-    await inbox.complete(first.ingressId);
+    expect(retry).toBeTruthy();
+    const staleLock = retry!.lockToken;
+    await pool.query("UPDATE webhook_inbox SET locked_at=now()-interval '6 minutes' WHERE ingress_id=$1", [first.ingressId]);
+    const reclaimedAgain = await inbox.claimBatch(100);
+    const current = reclaimedAgain.find((candidate) => candidate.ingressId === first.ingressId);
+    expect(current).toBeTruthy();
+    expect(current!.lockToken).not.toBe(staleLock);
+    expect(await inbox.complete(first.ingressId, staleLock)).toBe(false);
+    expect(await inbox.complete(first.ingressId, current!.lockToken)).toBe(true);
     const done = await pool.query('SELECT state,processed_at FROM webhook_inbox WHERE ingress_id=$1', [first.ingressId]);
     expect(done.rows[0].state).toBe('DONE');
     expect(done.rows[0].processed_at).toBeTruthy();
