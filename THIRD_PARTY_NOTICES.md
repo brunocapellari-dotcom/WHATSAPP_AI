@@ -12,6 +12,12 @@ Licensed under the Apache License, Version 2.0. The project uses the authoritati
 
 The complete Apache License 2.0 text and upstream copyright notices distributed with SheetJS must be preserved when the dependency is redistributed or vendored.
 
+## yauzl
+
+yauzl 3.4.0 — https://github.com/thejoshwolfe/yauzl
+
+Licensed under the MIT License. It is used only to inspect ZIP metadata and Office archive expansion limits before untrusted documents reach malware scanning and isolated parsing.
+
 ## WPPConnect
 
 WPPConnect is not copied into this repository. When the optional external WPPConnect adapter is used, the upstream WPPConnect software/service remains separately governed by its GNU Lesser General Public License version 3 and applicable terms.
