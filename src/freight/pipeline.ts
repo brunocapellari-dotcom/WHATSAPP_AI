@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { EntityResolver, MessageRepository, StructuredLanguageModel } from '../domain/ports.js';
 import type { FreightEvent, FreightFields, FreightObservation, RawMessage } from '../domain/schemas.js';
 import { OutboxEventSchema } from '../domain/schemas.js';
+import { deterministicUuid } from '../security/crypto.js';
 import { freightIdentity } from './dedup.js';
 import { extractFreight } from './extractor.js';
 import { preferField } from './fields.js';
@@ -68,8 +69,10 @@ export class FreightPipeline {
       ? quality.issues
       : [...quality.issues, 'dedup:insufficient_identity'];
 
+    // raw_messages.event_id is stable across webhook retries. Reusing it as the
+    // observation id makes every freight observation exactly-once per source message.
     const observation: FreightObservation = {
-      observationId: randomUUID(),
+      observationId: message.eventId,
       tenantId: message.tenantId,
       eventId: message.eventId,
       sourceMessageId: message.messageId,
@@ -101,23 +104,31 @@ export class FreightPipeline {
       return { observation };
     }
 
-    const existing = await this.repo.findFreightEventByFingerprint(
+    const event = await this.repo.mergeFreightEvent(
       message.tenantId,
       identity.fingerprint,
-    );
-
-    const event: FreightEvent = existing
-      ? {
-          ...existing,
-          lastSeenAt: message.occurredAt > existing.lastSeenAt
-            ? message.occurredAt
-            : existing.lastSeenAt,
-          observationIds: [...existing.observationIds, observation.observationId],
-          duplicateCount: existing.duplicateCount + 1,
-          mergedFields: mergeFields(existing.mergedFields, fields),
+      (existing) => {
+        if (existing?.observationIds.includes(observation.observationId)) {
+          return existing;
         }
-      : {
-          freightEventId: randomUUID(),
+
+        if (existing) {
+          const observationIds = [...existing.observationIds, observation.observationId];
+          return {
+            ...existing,
+            lastSeenAt: message.occurredAt > existing.lastSeenAt
+              ? message.occurredAt
+              : existing.lastSeenAt,
+            observationIds,
+            duplicateCount: Math.max(0, observationIds.length - 1),
+            mergedFields: mergeFields(existing.mergedFields, fields),
+          };
+        }
+
+        return {
+          freightEventId: deterministicUuid(
+            `freight-event:${message.tenantId}:${identity.fingerprint}`,
+          ),
           tenantId: message.tenantId,
           fingerprint: identity.fingerprint,
           firstSeenAt: message.occurredAt,
@@ -128,8 +139,9 @@ export class FreightPipeline {
           status: 'ACTIVE',
           schemaVersion: 1,
         };
+      },
+    );
 
-    await this.repo.saveFreightEvent(event);
     await this.repo.enqueueOutbox(OutboxEventSchema.parse({
       outboxId: randomUUID(),
       tenantId: message.tenantId,
