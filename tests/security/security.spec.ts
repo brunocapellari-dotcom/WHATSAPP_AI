@@ -4,6 +4,7 @@ import { assessUntrustedText, authorizeTool } from '../../src/security/policy.js
 import { verifyMetaSignature, verifyWebhookChallenge } from '../../src/security/webhook.js';
 import { validateAttachment } from '../../src/security/attachments.js';
 import { assertSafeHttpUrl, isBlockedNetworkAddress } from '../../src/security/safe-url.js';
+import { readResponseBytesLimited } from '../../src/security/download.js';
 
 const cleanScanner = { async scan() { return { clean: true }; } };
 
@@ -42,6 +43,20 @@ describe('security boundaries', () => {
 
     const infected = { async scan() { return { clean: false, signature: 'EICAR-Test-Signature' }; } };
     expect((await validateAttachment({ bytes: pdf, declaredMime: 'application/pdf', maxBytes: 1000, scanner: infected })).reason).toContain('malware');
+  });
+
+
+  it('caps media downloads before buffering the full response', async () => {
+    const declaredTooLarge = new Response(new Uint8Array([1, 2, 3]), {
+      headers: { 'content-length': '1000' },
+    });
+    await expect(readResponseBytesLimited(declaredTooLarge, 10)).rejects.toThrow('file_too_large');
+
+    const streamedTooLarge = new Response(new Uint8Array(32));
+    await expect(readResponseBytesLimited(streamedTooLarge, 16)).rejects.toThrow('file_too_large');
+
+    const allowed = new Response(new Uint8Array([1, 2, 3, 4]));
+    expect(await readResponseBytesLimited(allowed, 4)).toEqual(new Uint8Array([1, 2, 3, 4]));
   });
 
   it('blocks private-network URLs for untrusted URL retrieval', async () => {
