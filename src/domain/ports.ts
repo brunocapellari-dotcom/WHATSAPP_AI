@@ -25,7 +25,7 @@ export type BusinessRunClaim=
 export interface BusinessRunStore {
   claim(message:RawMessage,conversationId:string):Promise<BusinessRunClaim>;
   completeProcessing(tenantId:string,runId:string,result:BusinessRunResult):Promise<void>;
-  markSent(tenantId:string,runId:string,replyMessageId:string):Promise<void>;
+  markSent(tenantId:string,runId:string,replyMessageId?:string):Promise<void>;
   markFailed(tenantId:string,runId:string,error:string):Promise<void>;
 }
 export interface BusinessMessageHandler { handle(message:RawMessage,provider:WhatsAppProvider):Promise<{reply:string;handoff:boolean;replyMessageId?:string;conversationId?:string}>; }
