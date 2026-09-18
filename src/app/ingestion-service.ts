@@ -110,42 +110,34 @@ export class IngestionService {
       }
 
       const save = await this.messages.saveRaw(message);
-      if (save === 'duplicate') {
-        await this.quarantine.mark(message, 'DISCARDED');
-
-        if (collector.purpose === 'BUSINESS' && this.business) {
-          const handled = await this.business.handle(message, provider);
-          results.push({
-            message,
-            disposition: 'DUPLICATE',
-            ...(handled.replyMessageId ? { replyMessageId: handled.replyMessageId } : {}),
-            handoff: handled.handoff,
-          });
-        } else {
-          results.push({ message, disposition: 'DUPLICATE' });
-        }
-        continue;
+      const isReplay = save.status === 'duplicate';
+      if (message.eventId !== save.eventId) {
+        message = { ...message, eventId: save.eventId };
       }
 
+      // A replay may be recovering a crash that happened after raw persistence but
+      // before the domain workflow completed. Keep processing; downstream Business
+      // and Freight flows are responsible for their own idempotency.
       await this.quarantine.mark(message, 'PROMOTED');
+      const disposition = isReplay ? 'DUPLICATE' : 'PROMOTED';
 
       if (collector.purpose === 'FREIGHT_INTELLIGENCE') {
         const processed = await this.freight.process(message);
         results.push({
           message,
-          disposition: 'PROMOTED',
+          disposition,
           ...(processed?.event ? { freightEventId: processed.event.freightEventId } : {}),
         });
       } else if (this.business) {
         const handled = await this.business.handle(message, provider);
         results.push({
           message,
-          disposition: 'PROMOTED',
+          disposition,
           ...(handled.replyMessageId ? { replyMessageId: handled.replyMessageId } : {}),
           handoff: handled.handoff,
         });
       } else {
-        results.push({ message, disposition: 'PROMOTED' });
+        results.push({ message, disposition });
       }
     }
 
