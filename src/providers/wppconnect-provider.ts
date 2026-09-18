@@ -41,6 +41,7 @@ function extractSendMessageId(payload: Record<string, unknown>): string | null {
 
 export class WppConnectProvider implements WhatsAppProvider {
   readonly id = 'wppconnect';
+  readonly accountId: string;
   readonly capabilities: ProviderCapabilities = {
     receive: true,
     send: true,
@@ -60,7 +61,9 @@ export class WppConnectProvider implements WhatsAppProvider {
       piiHmacKey: string;
       session: string;
     },
-  ) {}
+  ) {
+    this.accountId = options.session;
+  }
 
   async sendText(input: { tenantId: string; to: string; text: string }) {
     const isGroup = input.to.endsWith('@g.us');
@@ -177,6 +180,75 @@ export class WppConnectProvider implements WhatsAppProvider {
       mimeType,
       ...(body.filename ? { fileName: String(body.filename) } : {}),
     };
+  }
+
+  async fetchReconciliationBatch() {
+    const merged = new Map<string, Record<string, unknown>>();
+
+    for (const endpoint of ['all-new-messages', 'all-unread-messages']) {
+      const response = await fetch(
+        `${this.options.baseUrl.replace(/\/$/, '')}/api/${encodeURIComponent(this.options.session)}/${endpoint}`,
+        {
+          headers: { Authorization: `Bearer ${this.options.apiToken}` },
+          signal: AbortSignal.timeout(15_000),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`wpp_reconciliation_failed:${endpoint}:${response.status}`);
+      }
+
+      const bodyBytes = await readResponseBytesLimited(response, 8 * 1024 * 1024);
+      const body = JSON.parse(new TextDecoder().decode(bodyBytes)) as Record<string, unknown>;
+      if (body.status && String(body.status).toLowerCase() !== 'success') {
+        throw new Error(`wpp_reconciliation_upstream_error:${endpoint}`);
+      }
+      const rows = Array.isArray(body.response) ? body.response : [];
+      for (const row of rows) {
+        if (!row || typeof row !== 'object') continue;
+        const message = row as Record<string, unknown>;
+        const id = serializedId(message.id)
+          ?? serializedId(message.messageId)
+          ?? `synthetic:${sha256(JSON.stringify(message)).slice(0, 48)}`;
+        merged.set(id, message);
+      }
+    }
+
+    return [...merged.values()].map((message) => {
+      const chatAddress = serializedId(message.chatId)
+        ?? serializedId(message.from)
+        ?? null;
+      const isGroup = Boolean(
+        message.isGroupMsg
+        || chatAddress?.endsWith('@g.us'),
+      );
+      return {
+        payload: {
+          event: 'unreadmessages',
+          session: this.options.session,
+          ...message,
+        },
+        chatAddress,
+        isGroup,
+      };
+    });
+  }
+
+  async markChatSeen(chatAddress: string, isGroup: boolean): Promise<void> {
+    const response = await fetch(
+      `${this.options.baseUrl.replace(/\/$/, '')}/api/${encodeURIComponent(this.options.session)}/send-seen`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.options.apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ phone: chatAddress, isGroup }),
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`wpp_mark_seen_failed:${response.status}`);
+    }
   }
 
   async health() {
