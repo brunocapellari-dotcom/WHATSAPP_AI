@@ -58,6 +58,7 @@ const ConfigSchema = z.object({
   CLAMAV_HOST: z.string().default('localhost'),
   CLAMAV_PORT: z.coerce.number().int().default(3310),
   ATTACHMENT_MAX_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
+  WEBHOOK_MAX_BYTES: z.coerce.number().int().positive().max(16 * 1024 * 1024).default(4 * 1024 * 1024),
 }).superRefine((value, ctx) => {
   addMissingPairIssue(ctx, value as Record<string, unknown>, 'META_ACCESS_TOKEN', 'META_PHONE_NUMBER_ID');
   addMissingPairIssue(ctx, value as Record<string, unknown>, 'AGROLOG_GATEWAY_URL', 'AGROLOG_GATEWAY_TOKEN');
