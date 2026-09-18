@@ -1,7 +1,12 @@
 import { fileTypeFromBuffer } from 'file-type';
 import type { MalwareScanner } from '../domain/ports.js';
+import { inspectOfficeArchive } from './archive-inspection.js';
 
 const TEXT_MIMES = new Set(['text/plain', 'text/csv']);
+const OFFICE_MIMES = new Set([
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+]);
 const ALLOWED = new Set([
   'application/pdf',
   'image/png',
@@ -53,6 +58,21 @@ export async function validateAttachment(input: {
     if (!detectedMime) return { accepted: false, reason: 'mime_unrecognized' };
     if (detectedMime !== declaredMime) {
       return { accepted: false, reason: 'mime_magic_mismatch', detectedMime };
+    }
+  }
+
+  if (OFFICE_MIMES.has(detectedMime)) {
+    try {
+      await inspectOfficeArchive({
+        bytes: input.bytes,
+        mimeType: detectedMime,
+      });
+    } catch (error) {
+      return {
+        accepted: false,
+        reason: error instanceof Error ? error.message : 'office_archive_invalid',
+        detectedMime,
+      };
     }
   }
 
