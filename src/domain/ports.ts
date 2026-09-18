@@ -7,7 +7,7 @@ export interface MalwareScanner { scan(input:Uint8Array):Promise<{clean:boolean;
 export interface AuditSink { write(event:{tenantId:string;actor:string;action:string;outcome:'ALLOW'|'DENY'|'ERROR';target?:string;metadata?:Record<string,unknown>}):Promise<void>; }
 export type CollectorPurpose='BUSINESS'|'FREIGHT_INTELLIGENCE';
 export type ResolvedCollector={collectorId:string;tenantId:string;provider:string;account:string;purpose:CollectorPurpose;status:'HEALTHY'|'DEGRADED'|'DOWN'|'DISABLED';webhookSecretHash?:string};
-export interface CollectorResolver { resolve(collectorId:string):Promise<ResolvedCollector|null>; }
+export interface CollectorResolver { resolve(collectorId:string):Promise<ResolvedCollector|null>; recordSuccess?(collectorId:string,latencyMs:number,lastMessage?:Date):Promise<void>; recordFailure?(collectorId:string,latencyMs:number,error:string):Promise<void>; }
 export interface QuarantineStore { put(message:RawMessage,expiresAt:Date):Promise<void>; mark(message:RawMessage,disposition:'PROMOTED'|'DISCARDED'|'REJECTED'):Promise<void>; }
 export type DownloadedMedia={bytes:Uint8Array;mimeType:string;fileName?:string};
 export interface ContentProcessor { extract(input:DownloadedMedia&{messageType:RawMessage['messageType']}):Promise<string>; }
