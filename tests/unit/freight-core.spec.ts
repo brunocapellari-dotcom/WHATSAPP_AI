@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CanonicalEntityResolver } from '../../src/freight/entity-resolution.js';
 import { heuristicExtract } from '../../src/freight/extractor.js';
-import { freightFingerprint } from '../../src/freight/dedup.js';
+import { freightFingerprint, freightIdentity } from '../../src/freight/dedup.js';
 
 describe('freight core', () => {
   it('resolves Rondonópolis aliases to one canonical entity', async () => {
@@ -16,6 +16,21 @@ describe('freight core', () => {
     expect(fields.product.truth).toBe('OBSERVADO');
     expect(fields.freightValue.truth).toBe('OBSERVADO');
     expect(fields.freightValue.value).toBe(175.5);
+  });
+
+  it('keeps incomplete messages observation-only instead of giving them a shared event identity', () => {
+    const fields = heuristicExtract('SOJA disponível');
+    const identity = freightIdentity({
+      fields,
+      contentHash: 'abc123',
+      canonical: {
+        productId: 'product:soja',
+        originId: null,
+        destinationId: null,
+      },
+    });
+    expect(identity.strength).toBe('WEAK');
+    expect(identity.eventEligible).toBe(false);
   });
 
   it('uses offer id as strongest dedup key', () => {
