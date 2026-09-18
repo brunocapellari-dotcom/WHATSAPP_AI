@@ -39,6 +39,48 @@ describe('Freight Intelligence end to end', () => {
     expect(repo.outbox.filter((x) => x.topic === 'agrolog.freight_event.v1')).toHaveLength(2);
   });
 
+
+  it('preserves weak relevant observations without creating a logical market event', async () => {
+    const { repo, service } = fixture();
+    const rows = await service.ingest('mock', 'freight-1', {
+      messageId: 'weak-1',
+      chatId: 'g1',
+      groupId: 'g1',
+      text: 'SOJA disponível',
+    });
+
+    expect(rows[0]?.disposition).toBe('PROMOTED');
+    expect(rows[0]?.freightEventId).toBeUndefined();
+    expect(repo.observations.size).toBe(1);
+    expect(repo.freightEvents.size).toBe(0);
+    const observation = [...repo.observations.values()][0]!;
+    expect(observation.issues).toContain('dedup:insufficient_identity');
+    expect(repo.outbox.filter((x) => x.topic === 'agrolog.freight_observation.v1')).toHaveLength(1);
+    expect(repo.outbox.filter((x) => x.topic === 'agrolog.freight_event.v1')).toHaveLength(0);
+  });
+
+  it('deduplicates equivalent structured offers across city aliases without offer id', async () => {
+    const { repo, service } = fixture();
+    await service.ingest('mock', 'freight-1', {
+      messageId: 'alias-1',
+      chatId: 'g1',
+      groupId: 'g1',
+      text: 'SOJA\nOrigem: Roo/MT\nDestino: Sorriso/MT\nFrete R$ 162,00',
+    });
+    await service.ingest('mock', 'freight-1', {
+      messageId: 'alias-2',
+      chatId: 'g2',
+      groupId: 'g2',
+      text: 'SOJA\nOrigem: Rondonópolis/MT\nDestino: Sorriso/MT\nFrete R$ 162,00',
+    });
+
+    expect(repo.observations.size).toBe(2);
+    expect(repo.freightEvents.size).toBe(1);
+    const event = [...repo.freightEvents.values()][0]!;
+    expect(event.duplicateCount).toBe(1);
+    expect(event.observationIds).toHaveLength(2);
+  });
+
   it('discards irrelevant group chatter before governed raw storage', async () => {
     const { repo, quarantine, service } = fixture();
     const rows = await service.ingest('mock', 'freight-1', { messageId: 'noise-1', chatId: 'g1', groupId: 'g1', text: 'Bom dia pessoal, tudo bem?' });
