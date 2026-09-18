@@ -10,6 +10,7 @@ export class JobQueue {
 
   async start() {
     await this.boss.start();
+
     await this.boss.createQueue('outbox-publish-dlq');
     await this.boss.createQueue('outbox-publish', {
       retryLimit: 8,
@@ -17,13 +18,7 @@ export class JobQueue {
       retryBackoff: true,
       deadLetter: 'outbox-publish-dlq',
     });
-    await this.boss.createQueue('followup-dlq');
-    await this.boss.createQueue('followup', {
-      retryLimit: 8,
-      retryDelay: 60,
-      retryBackoff: true,
-      deadLetter: 'followup-dlq',
-    });
+
     await this.boss.createQueue('quarantine-purge-dlq');
     await this.boss.createQueue('quarantine-purge', {
       retryLimit: 5,
@@ -38,22 +33,30 @@ export class JobQueue {
   }
 
   async scheduleOutbox() {
-    return this.boss.send('outbox-publish', {}, { singletonKey: 'outbox-publish', singletonSeconds: 5 });
-  }
-
-  async scheduleFollowup(data: Record<string, unknown>, startAfter: Date) {
-    return this.boss.send('followup', data, { startAfter });
+    return this.boss.send(
+      'outbox-publish',
+      {},
+      { singletonKey: 'outbox-publish', singletonSeconds: 5 },
+    );
   }
 
   async scheduleQuarantinePurge() {
-    return this.boss.send('quarantine-purge', {}, { singletonKey: 'quarantine-purge', singletonSeconds: 900 });
+    return this.boss.send(
+      'quarantine-purge',
+      {},
+      { singletonKey: 'quarantine-purge', singletonSeconds: 900 },
+    );
   }
 
   async workOutbox(handler: () => Promise<void>) {
-    await this.boss.work('outbox-publish', async () => { await handler(); });
+    await this.boss.work('outbox-publish', async () => {
+      await handler();
+    });
   }
 
   async workQuarantinePurge(handler: () => Promise<void>) {
-    await this.boss.work('quarantine-purge', async () => { await handler(); });
+    await this.boss.work('quarantine-purge', async () => {
+      await handler();
+    });
   }
 }
