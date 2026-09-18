@@ -9,6 +9,8 @@ import { FreightPipeline } from '../../src/freight/pipeline.js';
 import { CanonicalEntityResolver } from '../../src/freight/entity-resolution.js';
 import { MemoryAuditSink } from '../../src/infra/audit.js';
 import { MemoryCollectorResolver } from '../../src/infra/collectors.js';
+import { MemoryConversationStore } from '../../src/infra/conversations.js';
+import { MemoryBusinessRunStore } from '../../src/infra/business-runs.js';
 import { MemoryMessageRepository } from '../../src/infra/memory-repository.js';
 import { MemoryQuarantineStore } from '../../src/infra/quarantine.js';
 import { MockWhatsAppProvider } from '../../src/providers/mock-provider.js';
@@ -26,7 +28,7 @@ describe('Business AI provider-to-reply E2E', () => {
     const collectors = new MemoryCollectorResolver([{ collectorId: 'business-1', tenantId: 'tenant-a', provider: 'mock', account: 'wa-1', purpose: 'BUSINESS', status: 'HEALTHY' }]);
     const tools = new ToolRegistry(new MemoryAuditSink());
     tools.register({ name: 'consultar_preco', description: 'Preço real', risk: 'READ', input: z.object({ productId: z.string() }), execute: async () => ({ price: 99.9, currency: 'BRL' }) });
-    const business = new BusinessMessageService(new AgentRuntime(tools, new Model()));
+    const business = new BusinessMessageService(new AgentRuntime(tools, new Model()), new MemoryConversationStore(), new MemoryBusinessRunStore());
     const ingestion = new IngestionService(collectors, new Map([[provider.id, provider]]), new MemoryQuarantineStore(), repo, new FreightPipeline(repo, new CanonicalEntityResolver()), undefined, business);
 
     const result = await ingestion.ingest('mock', 'business-1', { messageId: 'b1', text: 'Qual o preço?', routingAddress: '5511999999999' });
