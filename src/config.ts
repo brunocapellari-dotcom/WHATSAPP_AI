@@ -49,7 +49,10 @@ const ConfigSchema = z.object({
   META_GROUPS_ENABLED: EnvBooleanSchema.default(false),
   WPP_BASE_URL: z.string().url().optional(),
   WPP_API_TOKEN: z.string().optional(),
-  WPP_WEBHOOK_SECRET: z.string().optional(),
+  WPP_COLLECTOR_ID: z.string().min(1).optional(),
+  WPP_SESSION: z.string().min(1).default('default'),
+  WPP_RECONCILE_INTERVAL_MS: z.coerce.number().int().min(5_000).max(10 * 60_000).default(15_000),
+  WPP_WEBHOOK_SECRET: z.string().min(32).optional(),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default('gpt-5.6-terra'),
   OPENAI_TRANSCRIPTION_MODEL: z.string().default('gpt-transcribe'),
@@ -63,14 +66,14 @@ const ConfigSchema = z.object({
   addMissingPairIssue(ctx, value as Record<string, unknown>, 'META_ACCESS_TOKEN', 'META_PHONE_NUMBER_ID');
   addMissingPairIssue(ctx, value as Record<string, unknown>, 'AGROLOG_GATEWAY_URL', 'AGROLOG_GATEWAY_TOKEN');
 
-  const wpp = [value.WPP_BASE_URL, value.WPP_API_TOKEN, value.WPP_WEBHOOK_SECRET].filter(Boolean).length;
-  if (wpp > 0 && wpp < 3) {
-    for (const key of ['WPP_BASE_URL', 'WPP_API_TOKEN', 'WPP_WEBHOOK_SECRET'] as const) {
+  const wppCore = [value.WPP_BASE_URL, value.WPP_API_TOKEN, value.WPP_COLLECTOR_ID].filter(Boolean).length;
+  if (wppCore > 0 && wppCore < 3) {
+    for (const key of ['WPP_BASE_URL', 'WPP_API_TOKEN', 'WPP_COLLECTOR_ID'] as const) {
       if (!value[key]) {
         ctx.addIssue({
           code: 'custom',
           path: [key],
-          message: 'WPP_BASE_URL, WPP_API_TOKEN and WPP_WEBHOOK_SECRET must be configured together',
+          message: 'WPP_BASE_URL, WPP_API_TOKEN and WPP_COLLECTOR_ID must be configured together',
         });
       }
     }
