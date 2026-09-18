@@ -25,6 +25,9 @@ describe('WPPConnect provider normalization', () => {
 
     expect(first[0]?.messageId.startsWith('synthetic:')).toBe(true);
     expect(first[0]?.messageId).toBe(replay[0]?.messageId);
-    expect(first[0]?.groupId).toBe('120363000000000000@g.us');
+    expect(first[0]?.chatId.startsWith('hmac:')).toBe(true);
+    expect(first[0]?.groupId?.startsWith('hmac:')).toBe(true);
+    expect(first[0]?.chatId).not.toContain('120363000000000000@g.us');
+    expect(first[0]?.routingAddress).toBe('120363000000000000@g.us');
   });
 });
