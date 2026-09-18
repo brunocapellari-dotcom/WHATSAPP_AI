@@ -2,7 +2,7 @@ import { Pool } from 'pg';
 import type { AppConfig } from '../config.js';
 import type { WhatsAppProvider } from '../domain/ports.js';
 import { FreightPipeline } from '../freight/pipeline.js';
-import { CanonicalEntityResolver } from '../freight/entity-resolution.js';
+import { PostgresEntityResolver } from '../freight/entity-resolution.js';
 import { PostgresMessageRepository } from '../infra/postgres-repository.js';
 import { PostgresCollectorResolver } from '../infra/collectors.js';
 import { EncryptedPostgresQuarantineStore } from '../infra/quarantine.js';
@@ -33,7 +33,7 @@ export function buildRuntime(config: AppConfig) {
   const messages = new PostgresMessageRepository(pool);
   const collectors = new PostgresCollectorResolver(pool);
   const quarantine = new EncryptedPostgresQuarantineStore(pool, config.APP_ENCRYPTION_KEY);
-  const resolver = new CanonicalEntityResolver();
+  const resolver = new PostgresEntityResolver(pool);
   const llm = config.OPENAI_API_KEY
     ? new OpenAIStructuredModel({ apiKey: config.OPENAI_API_KEY, model: config.OPENAI_MODEL, observeUsage })
     : undefined;
