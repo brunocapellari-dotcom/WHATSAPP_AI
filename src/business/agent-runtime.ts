@@ -45,6 +45,17 @@ export class AgentRuntime {
     });
   }
 
+  async forceHandoff(reason: string, context: Omit<ToolContext, 'actor'>) {
+    const toolResults: RuntimeToolResult[] = [];
+    await this.persistHandoff(reason, context, toolResults);
+    return {
+      persisted: toolResults.some(
+        (result) => result.name === 'transferir_humano' && result.ok,
+      ),
+      toolResults,
+    };
+  }
+
   async handleMessage(text: string, context: Omit<ToolContext, 'actor'>) {
     const inspection = await this.inspectInbound(text);
     const toolResults: RuntimeToolResult[] = [];
