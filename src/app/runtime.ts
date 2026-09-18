@@ -6,6 +6,7 @@ import { CanonicalEntityResolver } from '../freight/entity-resolution.js';
 import { PostgresMessageRepository } from '../infra/postgres-repository.js';
 import { PostgresCollectorResolver } from '../infra/collectors.js';
 import { EncryptedPostgresQuarantineStore } from '../infra/quarantine.js';
+import { PostgresConversationStore } from '../infra/conversations.js';
 import { MetaCloudProvider } from '../providers/meta-cloud-provider.js';
 import { WppConnectProvider } from '../providers/wppconnect-provider.js';
 import { OpenAIStructuredModel } from '../infra/openai-model.js';
@@ -67,12 +68,13 @@ export function buildRuntime(config: AppConfig) {
       }
     : undefined;
   const audit = new PostgresAuditSink(pool);
+  const conversations = new PostgresConversationStore(pool, config.APP_ENCRYPTION_KEY);
   const businessTools = buildPostgresBusinessTools(pool, config.PII_HMAC_KEY, audit);
   const businessModel = config.OPENAI_API_KEY
     ? new OpenAIBusinessModel({ apiKey: config.OPENAI_API_KEY, model: config.OPENAI_MODEL, observeUsage })
     : undefined;
   const businessRuntime = new AgentRuntime(businessTools, businessModel);
-  const business = new BusinessMessageService(businessRuntime);
+  const business = new BusinessMessageService(businessRuntime, conversations);
   const ingestion = new IngestionService(collectors, providers, quarantine, messages, freight, media, business);
-  return { pool, messages, collectors, quarantine, resolver, llm, freight, providers, ingestion, metrics, businessRuntime, clamav };
+  return { pool, messages, collectors, quarantine, conversations, resolver, llm, freight, providers, ingestion, metrics, businessRuntime, clamav };
 }
