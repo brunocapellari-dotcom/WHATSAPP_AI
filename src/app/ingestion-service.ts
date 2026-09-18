@@ -123,7 +123,7 @@ export class IngestionService {
         results.push({
           message,
           disposition: 'PROMOTED',
-          ...(processed ? { freightEventId: processed.event.freightEventId } : {}),
+          ...(processed?.event ? { freightEventId: processed.event.freightEventId } : {}),
         });
       } else if (this.business) {
         const handled = await this.business.handle(message, provider);
