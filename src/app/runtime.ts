@@ -54,7 +54,7 @@ export function buildRuntime(config: AppConfig) {
       baseUrl: config.WPP_BASE_URL,
       apiToken: config.WPP_API_TOKEN,
       piiHmacKey: config.PII_HMAC_KEY,
-      session: 'default',
+      session: config.WPP_SESSION,
     }));
   }
   const clamav = config.OPENAI_API_KEY ? new ClamAvScanner(config.CLAMAV_HOST, config.CLAMAV_PORT) : undefined;
