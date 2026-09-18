@@ -7,15 +7,18 @@ export class MemoryMessageRepository implements MessageRepository {
   readonly freightEvents = new Map<string, FreightEvent>();
   readonly outbox: OutboxEvent[] = [];
 
-  async saveRaw(message: RawMessage): Promise<'inserted' | 'duplicate'> {
+  async saveRaw(message: RawMessage): Promise<{ status: 'inserted' | 'duplicate'; eventId: string }> {
     const key = `${message.tenantId}:${message.provider}:${message.messageId}`;
-    if (this.raw.has(key)) return 'duplicate';
+    const existing = this.raw.get(key);
+    if (existing) return { status: 'duplicate', eventId: existing.eventId };
     this.raw.set(key, message);
-    return 'inserted';
+    return { status: 'inserted', eventId: message.eventId };
   }
 
   async saveObservation(observation: FreightObservation): Promise<void> {
-    this.observations.set(observation.observationId, observation);
+    if (!this.observations.has(observation.observationId)) {
+      this.observations.set(observation.observationId, observation);
+    }
   }
 
   async findFreightEventByFingerprint(tenantId: string, fingerprint: string): Promise<FreightEvent | null> {
@@ -26,7 +29,20 @@ export class MemoryMessageRepository implements MessageRepository {
     this.freightEvents.set(`${event.tenantId}:${event.fingerprint}`, event);
   }
 
+  async mergeFreightEvent(
+    tenantId: string,
+    fingerprint: string,
+    merge: (existing: FreightEvent | null) => FreightEvent,
+  ): Promise<FreightEvent> {
+    const key = `${tenantId}:${fingerprint}`;
+    const next = merge(this.freightEvents.get(key) ?? null);
+    this.freightEvents.set(key, next);
+    return next;
+  }
+
   async enqueueOutbox(event: OutboxEvent): Promise<void> {
-    if (!this.outbox.some((item) => item.idempotencyKey === event.idempotencyKey)) this.outbox.push(event);
+    if (!this.outbox.some((item) => item.idempotencyKey === event.idempotencyKey)) {
+      this.outbox.push(event);
+    }
   }
 }
