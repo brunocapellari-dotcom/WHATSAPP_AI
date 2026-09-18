@@ -6,39 +6,56 @@ import type { AppConfig } from '../config.js';
 import type { CollectorResolver, WhatsAppProvider } from '../domain/ports.js';
 import type { Pool } from 'pg';
 import type { ClamAvScanner } from '../infra/clamav.js';
-import type { IngestionService } from '../app/ingestion-service.js';
+import type { WebhookInbox } from '../infra/webhook-inbox.js';
 import type { Metrics } from '../observability/metrics.js';
 import { constantTimeEquals, hmacSha256 } from '../security/crypto.js';
 import { verifyMetaSignature, verifyWebhookChallenge } from '../security/webhook.js';
 import { internalApiAuth } from './auth.js';
 
-function ingestionHttpStatus(error: unknown): number {
-  const code = error instanceof Error ? error.message : '';
-  if (code === 'collector_not_found') return 404;
-  if (code === 'collector_disabled') return 403;
-  if (code === 'provider_not_configured') return 503;
-  return 500;
-}
+async function queueInboundWebhook(input: {
+  providerId: string;
+  collectorId: string;
+  rawBody: Buffer;
+  collectors: CollectorResolver;
+  inbox: WebhookInbox;
+}) {
+  const collector = await input.collectors.resolve(input.collectorId);
+  if (!collector || collector.provider !== input.providerId) {
+    return { status: 404, body: { error: 'collector_not_found' } };
+  }
+  if (collector.status === 'DISABLED') {
+    return { status: 403, body: { error: 'collector_disabled' } };
+  }
 
-function ingestionPublicError(status: number): string {
-  if (status === 404) return 'collector_not_found';
-  if (status === 403) return 'collector_disabled';
-  if (status === 503) return 'service_unavailable';
-  return 'ingestion_error';
+  const accepted = await input.inbox.accept({
+    tenantId: collector.tenantId,
+    provider: input.providerId,
+    collectorId: input.collectorId,
+    rawBody: input.rawBody,
+  });
+
+  return {
+    status: 200,
+    body: {
+      accepted: true,
+      queued: accepted.inserted,
+      ingressId: accepted.ingressId,
+    },
+  };
 }
 
 export async function buildHttpApp(input: {
   config: AppConfig;
-  ingestion: IngestionService;
   collectors: CollectorResolver;
   providers: Map<string, WhatsAppProvider>;
+  webhookInbox: WebhookInbox;
   metrics: Metrics;
   pool: Pool;
   clamav?: ClamAvScanner;
 }) {
   const app = Fastify({
     logger: { level: input.config.NODE_ENV === 'test' ? 'silent' : 'info' },
-    bodyLimit: input.config.ATTACHMENT_MAX_BYTES,
+    bodyLimit: input.config.WEBHOOK_MAX_BYTES,
   });
 
   await app.register(helmet, { global: true });
@@ -120,21 +137,23 @@ export async function buildHttpApp(input: {
 
     const collectorId = (request.params as { collectorId: string }).collectorId;
     try {
-      const rows = await input.ingestion.ingest('meta-cloud', collectorId, request.body);
-      for (const row of rows) {
-        input.metrics.messages.inc({ provider: 'meta-cloud', disposition: row.disposition });
-      }
-      input.metrics.collectorHealth.set({ collector: collectorId, provider: 'meta-cloud' }, 1);
-      return reply.code(200).send({ accepted: rows.length });
-    } catch (error) {
-      const status = ingestionHttpStatus(error);
-      input.metrics.failures.inc({ component: 'meta-webhook' });
-      input.metrics.collectorHealth.set({ collector: collectorId, provider: 'meta-cloud' }, 0);
-      request.log.error({ err: error, collectorId, requestId: request.id }, 'meta webhook ingestion failed');
-      return reply.code(status).send({
-        error: ingestionPublicError(status),
-        requestId: request.id,
+      const queued = await queueInboundWebhook({
+        providerId: 'meta-cloud',
+        collectorId,
+        rawBody: raw,
+        collectors: input.collectors,
+        inbox: input.webhookInbox,
       });
+      input.metrics.webhookIngress.inc({
+        provider: 'meta-cloud',
+        outcome: queued.status === 200 ? (queued.body.queued ? 'queued' : 'duplicate') : 'rejected',
+      });
+      return reply.code(queued.status).send(queued.body);
+    } catch (error) {
+      input.metrics.failures.inc({ component: 'meta-webhook-inbox' });
+      input.metrics.webhookIngress.inc({ provider: 'meta-cloud', outcome: 'error' });
+      request.log.error({ err: error, collectorId, requestId: request.id }, 'meta webhook durable acceptance failed');
+      return reply.code(503).send({ error: 'ingress_unavailable', requestId: request.id });
     }
   });
 
@@ -153,21 +172,23 @@ export async function buildHttpApp(input: {
 
     const collectorId = (request.params as { collectorId: string }).collectorId;
     try {
-      const rows = await input.ingestion.ingest('wppconnect', collectorId, request.body);
-      for (const row of rows) {
-        input.metrics.messages.inc({ provider: 'wppconnect', disposition: row.disposition });
-      }
-      input.metrics.collectorHealth.set({ collector: collectorId, provider: 'wppconnect' }, 1);
-      return reply.code(200).send({ accepted: rows.length });
-    } catch (error) {
-      const status = ingestionHttpStatus(error);
-      input.metrics.failures.inc({ component: 'wppconnect-webhook' });
-      input.metrics.collectorHealth.set({ collector: collectorId, provider: 'wppconnect' }, 0);
-      request.log.error({ err: error, collectorId, requestId: request.id }, 'WPPConnect webhook ingestion failed');
-      return reply.code(status).send({
-        error: ingestionPublicError(status),
-        requestId: request.id,
+      const queued = await queueInboundWebhook({
+        providerId: 'wppconnect',
+        collectorId,
+        rawBody: raw,
+        collectors: input.collectors,
+        inbox: input.webhookInbox,
       });
+      input.metrics.webhookIngress.inc({
+        provider: 'wppconnect',
+        outcome: queued.status === 200 ? (queued.body.queued ? 'queued' : 'duplicate') : 'rejected',
+      });
+      return reply.code(queued.status).send(queued.body);
+    } catch (error) {
+      input.metrics.failures.inc({ component: 'wppconnect-webhook-inbox' });
+      input.metrics.webhookIngress.inc({ provider: 'wppconnect', outcome: 'error' });
+      request.log.error({ err: error, collectorId, requestId: request.id }, 'WPPConnect webhook durable acceptance failed');
+      return reply.code(503).send({ error: 'ingress_unavailable', requestId: request.id });
     }
   });
 
