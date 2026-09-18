@@ -1,9 +1,8 @@
 import OpenAI, { toFile } from 'openai';
-import * as XLSX from 'xlsx';
-import mammoth from 'mammoth';
 import type { ContentProcessor, DownloadedMedia } from '../domain/ports.js';
 import type { MessageType } from '../domain/schemas.js';
 import { responseUsageSample, type AiUsageObserver } from '../observability/ai-usage.js';
+import { parseOfficeDocumentIsolated } from '../security/document-parser-sandbox.js';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -37,26 +36,11 @@ export class OpenAIMediaProcessor implements ContentProcessor {
       return new TextDecoder('utf-8', { fatal: false }).decode(input.bytes).slice(0, 200_000);
     }
 
-    if (input.mimeType === XLSX_MIME) {
-      const workbook = XLSX.read(Buffer.from(input.bytes), {
-        type: 'buffer',
-        cellDates: true,
-        cellFormula: false,
-        cellHTML: false,
+    if (input.mimeType === XLSX_MIME || input.mimeType === DOCX_MIME) {
+      return parseOfficeDocumentIsolated({
+        bytes: input.bytes,
+        mimeType: input.mimeType,
       });
-      const rows: string[] = [];
-      for (const sheetName of workbook.SheetNames.slice(0, 20)) {
-        const sheet = workbook.Sheets[sheetName];
-        if (!sheet) continue;
-        rows.push(`# ${sheetName}`);
-        rows.push(XLSX.utils.sheet_to_csv(sheet, { blankrows: false }).slice(0, 100_000));
-      }
-      return rows.join('\n').slice(0, 200_000);
-    }
-
-    if (input.mimeType === DOCX_MIME) {
-      const result = await mammoth.extractRawText({ buffer: Buffer.from(input.bytes) });
-      return result.value.slice(0, 200_000);
     }
 
     const base64 = Buffer.from(input.bytes).toString('base64');
