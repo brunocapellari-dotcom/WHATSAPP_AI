@@ -4,6 +4,7 @@ import { RawMessageSchema, type ProviderCapabilities, type RawMessage } from '..
 import { pseudonymize, sha256 } from '../security/crypto.js';
 import { readResponseBytesLimited } from '../security/download.js';
 import { assertSafeHttpUrl } from '../security/safe-url.js';
+import { ProviderSendError } from './errors.js';
 
 type MetaProviderOptions = {
   accessToken?: string;
@@ -23,7 +24,7 @@ export class MetaCloudProvider implements WhatsAppProvider {
     this.capabilities = {
       receive: true,
       send: Boolean(options.accessToken && options.phoneNumberId),
-      media: true,
+      media: Boolean(options.accessToken),
       templates: true,
       managedGroups: Boolean(options.groupsEnabled),
       existingGroups: false,
@@ -34,31 +35,48 @@ export class MetaCloudProvider implements WhatsAppProvider {
   }
 
   async sendText(input: { tenantId: string; to: string; text: string }) {
-    if (!this.options.accessToken || !this.options.phoneNumberId) throw new Error('meta_provider_not_configured');
+    if (!this.options.accessToken || !this.options.phoneNumberId) {
+      throw new ProviderSendError('meta_provider_not_configured', false);
+    }
     const isGroup = input.to.startsWith('group:');
-    if (isGroup && !this.options.groupsEnabled) throw new Error('meta_groups_not_enabled');
+    if (isGroup && !this.options.groupsEnabled) {
+      throw new ProviderSendError('meta_groups_not_enabled', false);
+    }
     const recipient = isGroup ? input.to.slice('group:'.length) : input.to;
-    const response = await fetch(
-      `https://graph.facebook.com/${this.graphVersion}/${this.options.phoneNumberId}/messages`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.options.accessToken}`,
-          'Content-Type': 'application/json',
+
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://graph.facebook.com/${this.graphVersion}/${this.options.phoneNumberId}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.options.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            recipient_type: isGroup ? 'group' : 'individual',
+            to: recipient,
+            type: 'text',
+            text: { body: input.text },
+          }),
+          signal: AbortSignal.timeout(15_000),
         },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          recipient_type: isGroup ? 'group' : 'individual',
-          to: recipient,
-          type: 'text',
-          text: { body: input.text },
-        }),
-      },
-    );
-    if (!response.ok) throw new Error(`meta_send_failed:${response.status}:${await response.text()}`);
+      );
+    } catch (cause) {
+      throw new ProviderSendError('meta_send_transport_failure', true, { cause });
+    }
+
+    if (!response.ok) {
+      throw new ProviderSendError(`meta_send_failed:${response.status}`, false);
+    }
+
     const data = await response.json() as { messages?: Array<{ id?: string }> };
     const messageId = data.messages?.[0]?.id;
-    if (!messageId) throw new Error('meta_send_missing_message_id');
+    if (!messageId) {
+      throw new ProviderSendError('meta_send_missing_message_id', true);
+    }
     return { messageId };
   }
 
@@ -139,7 +157,10 @@ export class MetaCloudProvider implements WhatsAppProvider {
     if (!this.options.accessToken) throw new Error('meta_provider_not_configured');
     const meta = await fetch(
       `https://graph.facebook.com/${this.graphVersion}/${encodeURIComponent(reference)}`,
-      { headers: { Authorization: `Bearer ${this.options.accessToken}` } },
+      {
+        headers: { Authorization: `Bearer ${this.options.accessToken}` },
+        signal: AbortSignal.timeout(15_000),
+      },
     );
     if (!meta.ok) throw new Error(`meta_media_metadata_failed:${meta.status}`);
     const info = await meta.json() as { url?: string; mime_type?: string };
@@ -149,6 +170,7 @@ export class MetaCloudProvider implements WhatsAppProvider {
     const file = await fetch(safeUrl, {
       headers: { Authorization: `Bearer ${this.options.accessToken}` },
       redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
     });
     if (!file.ok) throw new Error(`meta_media_download_failed:${file.status}`);
     const bytes = await readResponseBytesLimited(file, options?.maxBytes ?? 25 * 1024 * 1024);
