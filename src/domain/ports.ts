@@ -14,4 +14,5 @@ export interface ContentProcessor { extract(input:DownloadedMedia&{messageType:R
 export type BusinessToolCall={name:string;input:Record<string,unknown>};
 export type BusinessPlan={role:'FRONT_DESK'|'SALES'|'QUOTE'|'CRM'|'SCHEDULING'|'SUPPORT'|'HUMAN_HANDOFF';reply:string;toolCalls:BusinessToolCall[];handoff:boolean;handoffReason:string|null};
 export interface BusinessDecisionModel { plan(input:{message:string;tools:Array<{name:string;description:string;risk:string}>;suspicious:boolean}):Promise<BusinessPlan>; }
-export interface BusinessMessageHandler { handle(message:RawMessage,provider:WhatsAppProvider):Promise<{reply:string;handoff:boolean;replyMessageId?:string}>; }
+export interface ConversationStore { ensure(message:RawMessage):Promise<{conversationId:string}>; getRouting(tenantId:string,conversationId:string):Promise<{provider:string;routingAddress:string}|null>; }
+export interface BusinessMessageHandler { handle(message:RawMessage,provider:WhatsAppProvider):Promise<{reply:string;handoff:boolean;replyMessageId?:string;conversationId?:string}>; }
