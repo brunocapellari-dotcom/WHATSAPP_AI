@@ -31,6 +31,15 @@ const publisher = config.AGROLOG_GATEWAY_URL && config.AGROLOG_GATEWAY_TOKEN
     })
   : undefined;
 
+function reportBackgroundError(component: string, error: unknown) {
+  processingRuntime.metrics.failures.inc({ component });
+  console.error(component, error);
+}
+
+function runBackground(component: string, task: () => Promise<unknown>) {
+  void task().catch((error) => reportBackgroundError(component, error));
+}
+
 await queue.start();
 
 if (publisher) {
@@ -69,18 +78,33 @@ async function drainInbox() {
           collector: item.collectorId,
           provider: item.provider,
         }, 1);
-        await inbox.complete(item.ingressId);
+
+        const completed = await inbox.complete(item.ingressId, item.lockToken);
+        if (!completed) {
+          processingRuntime.metrics.failures.inc({ component: 'webhook-inbox-lease-lost' });
+          console.warn('webhook-inbox-lease-lost', { ingressId: item.ingressId });
+        }
       } catch (error) {
         processingRuntime.metrics.failures.inc({ component: 'webhook-inbox-processing' });
         processingRuntime.metrics.collectorHealth.set({
           collector: item.collectorId,
           provider: item.provider,
         }, 0);
-        await inbox.fail(
-          item.ingressId,
-          item.attempts,
-          error instanceof Error ? error.message : 'webhook_processing_failed',
-        );
+
+        try {
+          const failed = await inbox.fail(
+            item.ingressId,
+            item.lockToken,
+            item.attempts,
+            error instanceof Error ? error.message : 'webhook_processing_failed',
+          );
+          if (!failed) {
+            processingRuntime.metrics.failures.inc({ component: 'webhook-inbox-lease-lost' });
+            console.warn('webhook-inbox-fail-lease-lost', { ingressId: item.ingressId });
+          }
+        } catch (stateError) {
+          reportBackgroundError('webhook-inbox-failure-persist', stateError);
+        }
       }
     }
   } finally {
@@ -89,22 +113,22 @@ async function drainInbox() {
 }
 
 const inboxTimer = setInterval(() => {
-  void drainInbox();
+  runBackground('webhook-inbox-drain', drainInbox);
 }, 1_000);
 
 const outboxTimer = publisher
   ? setInterval(() => {
-      void queue.scheduleOutbox();
+      runBackground('outbox-schedule', () => queue.scheduleOutbox());
     }, 5_000)
   : undefined;
 
 const retentionTimer = setInterval(() => {
-  void queue.scheduleQuarantinePurge();
+  runBackground('retention-schedule', () => queue.scheduleQuarantinePurge());
 }, 15 * 60 * 1000);
 
-void drainInbox();
-if (publisher) void queue.scheduleOutbox();
-void queue.scheduleQuarantinePurge();
+runBackground('webhook-inbox-drain', drainInbox);
+if (publisher) runBackground('outbox-schedule', () => queue.scheduleOutbox());
+runBackground('retention-schedule', () => queue.scheduleQuarantinePurge());
 
 const shutdown = async () => {
   clearInterval(inboxTimer);
