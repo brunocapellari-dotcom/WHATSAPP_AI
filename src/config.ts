@@ -1,5 +1,32 @@
 import { z } from 'zod';
 
+const EnvBooleanSchema = z.preprocess((raw) => {
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'string') {
+    const value = raw.trim().toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(value)) return true;
+    if (['false', '0', 'no', 'off', ''].includes(value)) return false;
+  }
+  return raw;
+}, z.boolean());
+
+function addMissingPairIssue(
+  ctx: z.RefinementCtx,
+  value: Record<string, unknown>,
+  left: string,
+  right: string,
+) {
+  const hasLeft = Boolean(value[left]);
+  const hasRight = Boolean(value[right]);
+  if (hasLeft === hasRight) return;
+  const missing = hasLeft ? right : left;
+  ctx.addIssue({
+    code: 'custom',
+    path: [missing],
+    message: `${left} and ${right} must be configured together`,
+  });
+}
+
 const ConfigSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   HOST: z.string().default('0.0.0.0'),
@@ -19,7 +46,7 @@ const ConfigSchema = z.object({
   META_ACCESS_TOKEN: z.string().optional(),
   META_PHONE_NUMBER_ID: z.string().optional(),
   META_GRAPH_VERSION: z.string().default('v26.0'),
-  META_GROUPS_ENABLED: z.coerce.boolean().default(false),
+  META_GROUPS_ENABLED: EnvBooleanSchema.default(false),
   WPP_BASE_URL: z.string().url().optional(),
   WPP_API_TOKEN: z.string().optional(),
   WPP_WEBHOOK_SECRET: z.string().optional(),
@@ -32,8 +59,42 @@ const ConfigSchema = z.object({
   CLAMAV_PORT: z.coerce.number().int().default(3310),
   ATTACHMENT_MAX_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
 }).superRefine((value, ctx) => {
-  if (value.NODE_ENV === 'production' && !value.METRICS_TOKEN) {
-    ctx.addIssue({ code: 'custom', path: ['METRICS_TOKEN'], message: 'METRICS_TOKEN is required in production' });
+  addMissingPairIssue(ctx, value as Record<string, unknown>, 'META_ACCESS_TOKEN', 'META_PHONE_NUMBER_ID');
+  addMissingPairIssue(ctx, value as Record<string, unknown>, 'AGROLOG_GATEWAY_URL', 'AGROLOG_GATEWAY_TOKEN');
+
+  const wpp = [value.WPP_BASE_URL, value.WPP_API_TOKEN, value.WPP_WEBHOOK_SECRET].filter(Boolean).length;
+  if (wpp > 0 && wpp < 3) {
+    for (const key of ['WPP_BASE_URL', 'WPP_API_TOKEN', 'WPP_WEBHOOK_SECRET'] as const) {
+      if (!value[key]) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: 'WPP_BASE_URL, WPP_API_TOKEN and WPP_WEBHOOK_SECRET must be configured together',
+        });
+      }
+    }
+  }
+
+  if (value.NODE_ENV === 'production') {
+    if (!value.METRICS_TOKEN) {
+      ctx.addIssue({ code: 'custom', path: ['METRICS_TOKEN'], message: 'METRICS_TOKEN is required in production' });
+    }
+    if (value.DATABASE_URL.includes('change_me')) {
+      ctx.addIssue({ code: 'custom', path: ['DATABASE_URL'], message: 'production DATABASE_URL cannot use the example credential' });
+    }
+
+    const secretFields = [
+      ['APP_ENCRYPTION_KEY', value.APP_ENCRYPTION_KEY],
+      ['PII_HMAC_KEY', value.PII_HMAC_KEY],
+      ['INTERNAL_API_KEY', value.INTERNAL_API_KEY],
+      ['META_VERIFY_TOKEN', value.META_VERIFY_TOKEN],
+      ['META_APP_SECRET', value.META_APP_SECRET],
+    ] as const;
+    for (const [field, secret] of secretFields) {
+      if (/replace|change[_-]?me/i.test(secret)) {
+        ctx.addIssue({ code: 'custom', path: [field], message: `${field} cannot use an example placeholder in production` });
+      }
+    }
   }
 });
 
