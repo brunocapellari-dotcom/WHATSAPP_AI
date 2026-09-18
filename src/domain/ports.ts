@@ -28,6 +28,7 @@ export interface BusinessRunStore {
   claim(message:RawMessage,conversationId:string):Promise<BusinessRunClaim>;
   completeProcessing(tenantId:string,runId:string,result:BusinessRunResult):Promise<void>;
   beginSend(tenantId:string,runId:string):Promise<void>;
+  markNoSendCompleted(tenantId:string,runId:string):Promise<void>;
   markSent(tenantId:string,runId:string,replyMessageId?:string):Promise<void>;
   markSendRetryable(tenantId:string,runId:string,error:string):Promise<void>;
   markDeliveryUncertain(tenantId:string,runId:string,error:string):Promise<void>;
