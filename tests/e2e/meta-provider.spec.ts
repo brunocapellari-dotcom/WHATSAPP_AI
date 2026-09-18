@@ -25,6 +25,9 @@ describe('Meta Cloud provider normalization', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.provider).toBe('meta-cloud');
     expect(rows[0]?.senderReference.startsWith('hmac:')).toBe(true);
+    expect(rows[0]?.chatId.startsWith('hmac:')).toBe(true);
+    expect(rows[0]?.chatId).not.toContain('5565999999999');
+    expect(rows[0]?.routingAddress).toBe('5565999999999');
     expect(rows[0]?.text).toContain('SOJA');
     expect(provider.capabilities.existingGroups).toBe(false);
   });
