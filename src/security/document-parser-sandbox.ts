@@ -13,7 +13,8 @@ const { parentPort, workerData } = require('node:worker_threads');
     let text = '';
 
     if (mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
-      const XLSX = await import('xlsx');
+      const imported = await import('xlsx');
+      const XLSX = imported.default ?? imported;
       const workbook = XLSX.read(bytes, {
         type: 'buffer',
         cellDates: true,
