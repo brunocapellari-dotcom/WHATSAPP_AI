@@ -71,7 +71,7 @@ export class IngestionService {
 
       if (!message.text && message.attachmentReference && provider.downloadMedia && this.media) {
         try {
-          const media = await provider.downloadMedia(message.attachmentReference);
+          const media = await provider.downloadMedia(message.attachmentReference, { maxBytes: this.media.maxBytes });
           const validation = await validateAttachment({
             bytes: media.bytes,
             declaredMime: media.mimeType,
