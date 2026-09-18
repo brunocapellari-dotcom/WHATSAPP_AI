@@ -49,8 +49,10 @@ export class WppConnectProvider implements WhatsAppProvider {
     const from = String(data.from ?? data.sender ?? 'unknown');
     const providerMessageId = String(data.id ?? data.messageId ?? '').trim();
     const messageId = providerMessageId || `synthetic:${sha256(JSON.stringify(data)).slice(0, 48)}`;
-    const chatId = String(data.chatId ?? data.from ?? 'unknown');
-    const isGroup = chatId.endsWith('@g.us') || Boolean(data.isGroupMsg);
+    const routingChatId = String(data.chatId ?? data.from ?? 'unknown');
+    const isGroup = routingChatId.endsWith('@g.us') || Boolean(data.isGroupMsg);
+    const chatReference = pseudonymize(routingChatId, this.options.piiHmacKey);
+    const groupReference = isGroup ? chatReference : null;
     const text = String(data.body ?? data.content ?? '').trim() || null;
     const messageType = data.type === 'image'
       ? 'image'
@@ -67,12 +69,12 @@ export class WppConnectProvider implements WhatsAppProvider {
       collectorId: context.collectorId,
       accountId: this.options.session,
       messageId,
-      chatId,
-      groupId: isGroup ? chatId : null,
+      chatId: chatReference,
+      groupId: groupReference,
       occurredAt: data.timestamp ? new Date(Number(data.timestamp) * 1000) : new Date(),
       receivedAt: new Date(),
       senderReference: pseudonymize(from, this.options.piiHmacKey),
-      routingAddress: isGroup ? chatId : from,
+      routingAddress: isGroup ? routingChatId : from,
       messageType,
       text,
       attachmentReference: data.mediaId ? String(data.mediaId) : null,
