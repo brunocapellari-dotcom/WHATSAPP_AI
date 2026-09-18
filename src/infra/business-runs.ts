@@ -53,10 +53,10 @@ export class MemoryBusinessRunStore implements BusinessRunStore {
     row.state = 'PENDING_SEND';
   }
 
-  async markSent(_tenantId: string, runId: string, replyMessageId: string) {
+  async markSent(_tenantId: string, runId: string, replyMessageId?: string) {
     const row = [...this.rows.values()].find((candidate) => candidate.runId === runId);
     if (!row) throw new Error('business_run_not_found');
-    row.replyMessageId = replyMessageId;
+    if (replyMessageId) row.replyMessageId = replyMessageId;
     row.state = 'SENT';
   }
 
@@ -151,14 +151,14 @@ export class PostgresBusinessRunStore implements BusinessRunStore {
     if (updated.rowCount !== 1) throw new Error('business_run_transition_failed');
   }
 
-  async markSent(tenantId: string, runId: string, replyMessageId: string): Promise<void> {
+  async markSent(tenantId: string, runId: string, replyMessageId?: string): Promise<void> {
     const updated = await tenantQuery(
       this.pool,
       tenantId,
       `UPDATE business_message_runs
        SET state='SENT',reply_message_id=$3,last_error=NULL,updated_at=now()
        WHERE tenant_id=$1 AND run_id=$2 AND state='PENDING_SEND'`,
-      [tenantId, runId, replyMessageId],
+      [tenantId, runId, replyMessageId ?? null],
     );
     if (updated.rowCount !== 1) throw new Error('business_run_mark_sent_failed');
   }
