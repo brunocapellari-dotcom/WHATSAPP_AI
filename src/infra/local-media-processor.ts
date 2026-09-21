@@ -77,7 +77,6 @@ export class LocalMediaProcessor implements ContentProcessor {
 
   async health() {
     const checks = await Promise.all([
-      this.options.ai.health(),
       this.whisperHealth(),
       this.binaryHealth('ffmpeg'),
       this.binaryHealth('pdftotext'),
@@ -86,11 +85,10 @@ export class LocalMediaProcessor implements ContentProcessor {
     return {
       ok: checks.every((x) => x.ok),
       details: {
-        localAi: checks[0],
-        whisper: checks[1],
-        ffmpeg: checks[2],
-        pdftotext: checks[3],
-        pdftoppm: checks[4],
+        whisper: checks[0],
+        ffmpeg: checks[1],
+        pdftotext: checks[2],
+        pdftoppm: checks[3],
       },
     };
   }
