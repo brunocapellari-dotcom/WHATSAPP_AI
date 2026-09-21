@@ -1,4 +1,4 @@
-import type { BusinessDecisionModel } from '../domain/ports.js';
+import type { BusinessDecisionModel, BusinessToolResult } from '../domain/ports.js';
 import { assessUntrustedText } from '../security/policy.js';
 import type { ToolContext, ToolRegistry } from './tool-registry.js';
 
@@ -11,12 +11,7 @@ export type AgentRole =
   | 'SUPPORT'
   | 'HUMAN_HANDOFF';
 
-type RuntimeToolResult = {
-  name: string;
-  ok: boolean;
-  output?: unknown;
-  error?: string;
-};
+type RuntimeToolResult = BusinessToolResult;
 
 export class AgentRuntime {
   constructor(
@@ -106,13 +101,60 @@ export class AgentRuntime {
     );
     const anyFailure = plannedToolFailed || persistenceFailed;
 
+    if (anyFailure || handoff) {
+      return {
+        role: 'HUMAN_HANDOFF' as const,
+        reply: anyFailure
+          ? 'Não consegui concluir uma ação com segurança; vou transferir para atendimento humano.'
+          : plan.reply,
+        handoff: true,
+        handoffReason: anyFailure ? 'tool_failure' : handoffReason,
+        toolResults,
+        suspiciousInput: inspection.security.suspicious,
+      };
+    }
+
+    if (this.model.finalize && toolResults.length > 0) {
+      try {
+        const final = await this.model.finalize({
+          message: inspection.security.content,
+          plan,
+          toolResults,
+        });
+        if (final.handoff) {
+          await this.persistHandoff(final.handoffReason ?? 'finalization_handoff', context, toolResults);
+        }
+        return {
+          role: final.handoff ? 'HUMAN_HANDOFF' as const : plan.role,
+          reply: final.reply,
+          handoff: final.handoff,
+          handoffReason: final.handoffReason,
+          toolResults,
+          suspiciousInput: inspection.security.suspicious,
+        };
+      } catch (error) {
+        toolResults.push({
+          name: 'business_finalize',
+          ok: false,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+        await this.persistHandoff('finalization_failure', context, toolResults);
+        return {
+          role: 'HUMAN_HANDOFF' as const,
+          reply: 'A ação foi registrada, mas não consegui confirmar a resposta final com segurança. Vou transferir para atendimento humano.',
+          handoff: true,
+          handoffReason: 'finalization_failure',
+          toolResults,
+          suspiciousInput: inspection.security.suspicious,
+        };
+      }
+    }
+
     return {
-      role: handoff || anyFailure ? 'HUMAN_HANDOFF' as const : plan.role,
-      reply: anyFailure
-        ? 'Não consegui concluir uma ação com segurança; vou transferir para atendimento humano.'
-        : plan.reply,
-      handoff: handoff || anyFailure,
-      handoffReason: anyFailure ? 'tool_failure' : handoffReason,
+      role: plan.role,
+      reply: plan.reply,
+      handoff: false,
+      handoffReason: null,
       toolResults,
       suspiciousInput: inspection.security.suspicious,
     };
