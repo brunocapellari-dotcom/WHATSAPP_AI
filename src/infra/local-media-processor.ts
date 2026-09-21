@@ -128,13 +128,13 @@ export class LocalMediaProcessor implements ContentProcessor {
 
       await runCommand(
         'ffmpeg',
-        ['-v', 'error', '-nostdin', '-y', '-i', source, '-ar', '16000', '-ac', '1', '-f', 'wav', wav],
+        ['-v', 'error', '-nostdin', '-y', '-i', source, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', '-f', 'wav', wav],
         { timeoutMs: 60_000, maxBuffer: 512 * 1024 },
       );
 
       const wavBytes = await readFile(wav);
       const form = new FormData();
-      form.append('file', new Blob([wavBytes], { type: 'audio/wav' }), 'audio.wav');
+      form.append('file', new Blob([new Uint8Array(wavBytes)], { type: 'audio/wav' }), 'audio.wav');
       form.append('language', 'pt');
       form.append('temperature', '0');
       form.append('response_format', 'json');
