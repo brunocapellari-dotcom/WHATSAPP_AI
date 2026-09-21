@@ -13,8 +13,12 @@ export interface QuarantineStore { put(message:RawMessage,expiresAt:Date):Promis
 export type DownloadedMedia={bytes:Uint8Array;mimeType:string;fileName?:string};
 export interface ContentProcessor { extract(input:DownloadedMedia&{messageType:RawMessage['messageType']}):Promise<string>; }
 export type BusinessToolCall={name:string;input:Record<string,unknown>};
+export type BusinessToolResult={name:string;ok:boolean;output?:unknown;error?:string};
 export type BusinessPlan={role:'FRONT_DESK'|'SALES'|'QUOTE'|'CRM'|'SCHEDULING'|'SUPPORT'|'HUMAN_HANDOFF';reply:string;toolCalls:BusinessToolCall[];handoff:boolean;handoffReason:string|null};
-export interface BusinessDecisionModel { plan(input:{message:string;tools:Array<{name:string;description:string;risk:string}>;suspicious:boolean}):Promise<BusinessPlan>; }
+export interface BusinessDecisionModel {
+  plan(input:{message:string;tools:Array<{name:string;description:string;risk:string}>;suspicious:boolean}):Promise<BusinessPlan>;
+  finalize?(input:{message:string;plan:BusinessPlan;toolResults:BusinessToolResult[]}):Promise<{reply:string;handoff:boolean;handoffReason:string|null}>;
+}
 export interface ConversationStore { ensure(message:RawMessage):Promise<{conversationId:string}>; getRouting(tenantId:string,conversationId:string):Promise<{provider:string;routingAddress:string}|null>; }
 export type BusinessRunResult={reply:string;handoff:boolean;handoffReason:string|null};
 export type BusinessRunClaim=
