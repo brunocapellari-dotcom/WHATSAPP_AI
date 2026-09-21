@@ -122,7 +122,20 @@ export class AgentRuntime {
           toolResults,
         });
         if (final.handoff) {
-          await this.persistHandoff(final.handoffReason ?? 'finalization_handoff', context, toolResults);
+          const before = toolResults.filter(
+            (result) => result.name === 'transferir_humano' && result.ok,
+          ).length;
+          await this.persistHandoff(
+            final.handoffReason ?? 'finalization_handoff',
+            context,
+            toolResults,
+          );
+          const after = toolResults.filter(
+            (result) => result.name === 'transferir_humano' && result.ok,
+          ).length;
+          if (after === before && before === 0 && context.conversationId) {
+            throw new Error('finalization_handoff_persistence_failed');
+          }
         }
         return {
           role: final.handoff ? 'HUMAN_HANDOFF' as const : plan.role,
