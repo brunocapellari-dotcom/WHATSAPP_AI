@@ -70,18 +70,27 @@ export class LocalBusinessModel implements BusinessDecisionModel {
       toolCalls: Array<{ name: string; inputJson: string }>;
     };
 
-    const toolCalls = parsed.toolCalls
-      .filter((call) => allowed.has(call.name))
-      .map((call) => {
-        let toolInput: Record<string, unknown> = {};
-        try {
-          const candidate = JSON.parse(call.inputJson) as unknown;
-          if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
-            toolInput = candidate as Record<string, unknown>;
-          }
-        } catch {}
-        return { name: call.name, input: toolInput };
-      });
+    const invalidTool = parsed.toolCalls.find((call) => !allowed.has(call.name));
+    if (invalidTool) {
+      return {
+        role: 'HUMAN_HANDOFF',
+        reply: 'Não consegui validar uma ação automática com segurança. Vou transferir para atendimento humano.',
+        toolCalls: [],
+        handoff: true,
+        handoffReason: 'invalid_tool_request',
+      };
+    }
+
+    const toolCalls = parsed.toolCalls.map((call) => {
+      let toolInput: Record<string, unknown> = {};
+      try {
+        const candidate = JSON.parse(call.inputJson) as unknown;
+        if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+          toolInput = candidate as Record<string, unknown>;
+        }
+      } catch {}
+      return { name: call.name, input: toolInput };
+    });
 
     return { ...parsed, toolCalls };
   }
