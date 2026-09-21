@@ -34,7 +34,6 @@
     "fastify-raw-body": "^5.0.0",
     "file-type": "22.1.0",
     "mammoth": "^1.8.0",
-    "openai": "^6.0.0",
     "pg": "^8.0.0",
     "pg-boss": "^12.0.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
