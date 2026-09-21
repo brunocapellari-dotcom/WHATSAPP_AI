@@ -5,6 +5,7 @@ import { JobQueue } from './infra/job-queue.js';
 import { AgroLogOutboxPublisher } from './infra/agrolog-outbox.js';
 import { QuarantineRetention } from './infra/retention.js';
 import { WebhookInbox } from './infra/webhook-inbox.js';
+import { WppReconciliationService } from './app/wpp-reconciliation-service.js';
 
 const config = loadConfig();
 const workerDatabaseUrl = config.WORKER_DATABASE_URL ?? config.DATABASE_URL;
@@ -23,6 +24,15 @@ const processingRuntime = buildRuntime(config);
 const queue = new JobQueue(workerDatabaseUrl);
 const retention = new QuarantineRetention(privilegedPool);
 const inbox = new WebhookInbox(privilegedPool, config.APP_ENCRYPTION_KEY);
+
+const wppProvider = processingRuntime.providers.get('wppconnect');
+const wppReconciliation = config.WPP_COLLECTOR_ID && wppProvider
+  ? new WppReconciliationService(
+      processingRuntime.collectors,
+      inbox,
+      config.WEBHOOK_MAX_BYTES,
+    )
+  : undefined;
 
 const publisher = config.AGROLOG_GATEWAY_URL && config.AGROLOG_GATEWAY_TOKEN
   ? new AgroLogOutboxPublisher(privilegedPool, {
@@ -112,9 +122,39 @@ async function drainInbox() {
   }
 }
 
+let wppReconcileRunning = false;
+
+async function reconcileWpp() {
+  if (!wppReconciliation || !wppProvider || !config.WPP_COLLECTOR_ID || wppReconcileRunning) return;
+  wppReconcileRunning = true;
+  try {
+    const result = await wppReconciliation.run(wppProvider, config.WPP_COLLECTOR_ID);
+    if (result.queued > 0) {
+      processingRuntime.metrics.reconciliationMessages.inc(
+        { provider: 'wppconnect', outcome: 'queued' },
+        result.queued,
+      );
+    }
+    if (result.duplicates > 0) {
+      processingRuntime.metrics.reconciliationMessages.inc(
+        { provider: 'wppconnect', outcome: 'duplicate' },
+        result.duplicates,
+      );
+    }
+  } finally {
+    wppReconcileRunning = false;
+  }
+}
+
 const inboxTimer = setInterval(() => {
   runBackground('webhook-inbox-drain', drainInbox);
 }, 1_000);
+
+const wppReconciliationTimer = wppReconciliation
+  ? setInterval(() => {
+      runBackground('wpp-reconciliation', reconcileWpp);
+    }, config.WPP_RECONCILE_INTERVAL_MS)
+  : undefined;
 
 const outboxTimer = publisher
   ? setInterval(() => {
@@ -127,11 +167,13 @@ const retentionTimer = setInterval(() => {
 }, 15 * 60 * 1000);
 
 runBackground('webhook-inbox-drain', drainInbox);
+if (wppReconciliation) runBackground('wpp-reconciliation', reconcileWpp);
 if (publisher) runBackground('outbox-schedule', () => queue.scheduleOutbox());
 runBackground('retention-schedule', () => queue.scheduleQuarantinePurge());
 
 const shutdown = async () => {
   clearInterval(inboxTimer);
+  if (wppReconciliationTimer) clearInterval(wppReconciliationTimer);
   if (outboxTimer) clearInterval(outboxTimer);
   clearInterval(retentionTimer);
   await queue.stop();
