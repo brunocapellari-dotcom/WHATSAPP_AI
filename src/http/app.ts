@@ -8,6 +8,8 @@ import type { Pool } from 'pg';
 import type { ClamAvScanner } from '../infra/clamav.js';
 import type { WebhookInbox } from '../infra/webhook-inbox.js';
 import type { Metrics } from '../observability/metrics.js';
+import type { LocalAiClient } from '../infra/local-ai-client.js';
+import type { LocalMediaProcessor } from '../infra/local-media-processor.js';
 import { constantTimeEquals, hmacSha256 } from '../security/crypto.js';
 import { verifyMetaSignature, verifyWebhookChallenge } from '../security/webhook.js';
 import { internalApiAuth } from './auth.js';
@@ -55,6 +57,8 @@ export async function buildHttpApp(input: {
   metrics: Metrics;
   pool: Pool;
   clamav?: ClamAvScanner;
+  localAi?: LocalAiClient;
+  mediaProcessor?: LocalMediaProcessor;
 }) {
   const app = Fastify({
     logger: { level: input.config.NODE_ENV === 'test' ? 'silent' : 'info' },
@@ -98,6 +102,22 @@ export async function buildHttpApp(input: {
     ];
 
     if (input.clamav) checks.push({ component: 'clamav', ok: await input.clamav.ping() });
+    if (input.localAi) {
+      const localAi = await input.localAi.health();
+      checks.push({
+        component: 'local-ai',
+        ok: localAi.ok,
+        detail: JSON.stringify(localAi.details ?? {}),
+      });
+    }
+    if (input.mediaProcessor) {
+      const media = await input.mediaProcessor.health();
+      checks.push({
+        component: 'local-media',
+        ok: media.ok,
+        detail: JSON.stringify(media.details ?? {}),
+      });
+    }
     const requiredOk = checks.every((x) => x.ok);
     return reply.code(requiredOk ? 200 : 503).send({
       status: requiredOk ? 'ok' : 'degraded',
@@ -114,6 +134,9 @@ export async function buildHttpApp(input: {
   );
 
   app.get('/webhooks/meta', async (request, reply) => {
+    if (!input.config.META_VERIFY_TOKEN) {
+      return reply.code(503).send('meta_webhook_disabled');
+    }
     const q = request.query as Record<string, string | undefined>;
     const challenge = verifyWebhookChallenge({
       mode: q['hub.mode'],
@@ -126,6 +149,9 @@ export async function buildHttpApp(input: {
   });
 
   app.post('/webhooks/meta/:collectorId', { config: { rawBody: true } }, async (request, reply) => {
+    if (!input.config.META_APP_SECRET) {
+      return reply.code(503).send({ error: 'meta_webhook_disabled' });
+    }
     const raw = (request as typeof request & { rawBody?: Buffer }).rawBody;
     if (
       !raw ||
