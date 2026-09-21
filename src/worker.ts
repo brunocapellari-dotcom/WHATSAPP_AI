@@ -2,7 +2,7 @@ import { Pool } from 'pg';
 import { loadConfig } from './config.js';
 import { buildRuntime } from './app/runtime.js';
 import { JobQueue } from './infra/job-queue.js';
-import { AgroLogOutboxPublisher } from './infra/agrolog-outbox.js';
+import { AgroLogOutboxPublisher, LocalAgroLogOutboxPublisher } from './infra/agrolog-outbox.js';
 import { QuarantineRetention } from './infra/retention.js';
 import { WebhookInbox } from './infra/webhook-inbox.js';
 import { WppReconciliationService } from './app/wpp-reconciliation-service.js';
@@ -39,7 +39,9 @@ const publisher = config.AGROLOG_GATEWAY_URL && config.AGROLOG_GATEWAY_TOKEN
       gatewayUrl: config.AGROLOG_GATEWAY_URL,
       token: config.AGROLOG_GATEWAY_TOKEN,
     })
-  : undefined;
+  : new LocalAgroLogOutboxPublisher(privilegedPool, {
+      exportDir: config.AGROLOG_EXPORT_DIR,
+    });
 
 function reportBackgroundError(component: string, error: unknown) {
   processingRuntime.metrics.failures.inc({ component });
@@ -156,11 +158,9 @@ const wppReconciliationTimer = wppReconciliation
     }, config.WPP_RECONCILE_INTERVAL_MS)
   : undefined;
 
-const outboxTimer = publisher
-  ? setInterval(() => {
-      runBackground('outbox-schedule', () => queue.scheduleOutbox());
-    }, 5_000)
-  : undefined;
+const outboxTimer = setInterval(() => {
+  runBackground('outbox-schedule', () => queue.scheduleOutbox());
+}, 5_000);
 
 const retentionTimer = setInterval(() => {
   runBackground('retention-schedule', () => queue.scheduleQuarantinePurge());
@@ -168,13 +168,13 @@ const retentionTimer = setInterval(() => {
 
 runBackground('webhook-inbox-drain', drainInbox);
 if (wppReconciliation) runBackground('wpp-reconciliation', reconcileWpp);
-if (publisher) runBackground('outbox-schedule', () => queue.scheduleOutbox());
+runBackground('outbox-schedule', () => queue.scheduleOutbox());
 runBackground('retention-schedule', () => queue.scheduleQuarantinePurge());
 
 const shutdown = async () => {
   clearInterval(inboxTimer);
   if (wppReconciliationTimer) clearInterval(wppReconciliationTimer);
-  if (outboxTimer) clearInterval(outboxTimer);
+  clearInterval(outboxTimer);
   clearInterval(retentionTimer);
   await queue.stop();
   await processingRuntime.pool.end();
