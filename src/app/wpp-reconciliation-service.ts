@@ -11,7 +11,7 @@ export type WppReconciliationResult = {
 export class WppReconciliationService {
   constructor(
     private readonly collectors: CollectorResolver,
-    private readonly inbox: WebhookInbox,
+    private readonly inbox: Pick<WebhookInbox, 'accept'>,
     private readonly maxEnvelopeBytes: number,
   ) {}
 
