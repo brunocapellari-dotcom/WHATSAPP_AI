@@ -12,7 +12,6 @@ export class Metrics {
   readonly aiInputTokens = new Counter({ name: 'whatsapp_ai_ai_input_tokens_total', help: 'AI input tokens', labelNames: ['operation','model'], registers: [this.registry] });
   readonly aiCachedInputTokens = new Counter({ name: 'whatsapp_ai_ai_cached_input_tokens_total', help: 'AI cached input tokens', labelNames: ['operation','model'], registers: [this.registry] });
   readonly aiOutputTokens = new Counter({ name: 'whatsapp_ai_ai_output_tokens_total', help: 'AI output tokens', labelNames: ['operation','model'], registers: [this.registry] });
-  readonly aiEstimatedCostUsd = new Counter({ name: 'whatsapp_ai_ai_estimated_cost_usd_total', help: 'Estimated AI text-token cost in USD using the versioned internal price table', labelNames: ['operation','model'], registers: [this.registry] });
   readonly toolFailures = new Counter({ name: 'whatsapp_ai_tool_failures_total', help: 'Tool failures', labelNames: ['tool'], registers: [this.registry] });
   readonly duplicateRate = new Counter({ name: 'whatsapp_ai_duplicates_total', help: 'Duplicate messages/offers', labelNames: ['kind'], registers: [this.registry] });
   readonly queueLag = new Gauge({ name: 'whatsapp_ai_queue_lag', help: 'Queue lag', labelNames: ['queue'], registers: [this.registry] });
@@ -29,6 +28,5 @@ export class Metrics {
     if (sample.inputTokens !== undefined) this.aiInputTokens.inc(labels, sample.inputTokens);
     if (sample.cachedInputTokens !== undefined) this.aiCachedInputTokens.inc(labels, sample.cachedInputTokens);
     if (sample.outputTokens !== undefined) this.aiOutputTokens.inc(labels, sample.outputTokens);
-    if (sample.estimatedCostUsd !== undefined) this.aiEstimatedCostUsd.inc(labels, sample.estimatedCostUsd);
   }
 }
