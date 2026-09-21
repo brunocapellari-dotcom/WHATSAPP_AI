@@ -83,6 +83,7 @@ const ConfigSchema = z.object({
 
   AGROLOG_GATEWAY_URL: z.string().url().optional(),
   AGROLOG_GATEWAY_TOKEN: z.string().optional(),
+  AGROLOG_EXPORT_DIR: z.string().min(1).default('/data/agrolog-export'),
   CLAMAV_HOST: z.string().default('localhost'),
   CLAMAV_PORT: z.coerce.number().int().default(3310),
   ATTACHMENT_MAX_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
@@ -116,6 +117,7 @@ const ConfigSchema = z.object({
     for (const [field, endpoint] of [
       ['LOCAL_AI_BASE_URL', value.LOCAL_AI_BASE_URL],
       ['WHISPER_BASE_URL', value.WHISPER_BASE_URL],
+      ...(value.AGROLOG_GATEWAY_URL ? [['AGROLOG_GATEWAY_URL', value.AGROLOG_GATEWAY_URL] as const] : []),
     ] as const) {
       if (!isInternalEndpoint(endpoint)) {
         ctx.addIssue({
