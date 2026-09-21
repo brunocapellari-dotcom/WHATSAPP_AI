@@ -15,7 +15,10 @@
     "format": "biome format --write .",
     "lint": "biome check .",
     "bootstrap": "tsx scripts/bootstrap.ts",
-    "data:sync:ibge": "tsx scripts/sync-ibge-municipalities.ts"
+    "data:sync:ibge": "tsx scripts/sync-ibge-municipalities.ts",
+    "lock:prepare": "bash scripts/prepare-lockfile.sh",
+    "security:gate": "bash scripts/security-gate.sh",
+    "release:gate": "bash scripts/release-gate.sh"
   },
   "keywords": [],
   "author": "",
