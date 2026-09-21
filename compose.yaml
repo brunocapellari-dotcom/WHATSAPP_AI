@@ -12,53 +12,181 @@ services:
       retries: 20
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
 
   clamav:
-    image: clamav/clamav:stable
+    image: clamav/clamav:1.5.4
     healthcheck:
       test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
-      interval: 15s
+      interval: 20s
       timeout: 10s
-      retries: 20
+      retries: 30
+      start_period: 60s
     volumes:
       - clamav_data:/var/lib/clamav
+    restart: unless-stopped
 
-  migrate:
+  ollama:
+    image: ollama/ollama:0.34.2
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  ollama-init:
+    image: ollama/ollama:0.34.2
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      LOCAL_AI_MODEL: ${LOCAL_AI_MODEL:-qwen3-vl:4b-instruct}
+    entrypoint: ["/bin/sh", "-lc"]
+    command: ['ollama pull "$$LOCAL_AI_MODEL"']
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+  whisper-model:
     build:
       context: .
-      target: deps
-    command: ["npm","run","db:migrate"]
-    env_file: .env
+      dockerfile: docker/whisper/Dockerfile
+      args:
+        WHISPER_CPP_REF: v1.9.4
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+    entrypoint: ["/bin/sh", "-lc"]
+    command:
+      - |
+        test -s "/models/ggml-$$WHISPER_MODEL.bin" ||
+        /opt/whisper/models/download-ggml-model.sh "$$WHISPER_MODEL" /models
     volumes:
-      - .:/app
-      - /app/node_modules
+      - whisper_models:/models
+    restart: "no"
+
+  whisper:
+    build:
+      context: .
+      dockerfile: docker/whisper/Dockerfile
+      args:
+        WHISPER_CPP_REF: v1.9.4
+    command:
+      - whisper-server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - -m
+      - /models/ggml-${WHISPER_MODEL:-small}.bin
+    volumes:
+      - whisper_models:/models:ro
+    depends_on:
+      whisper-model:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  wppconnect:
+    image: wppconnect/wppconnect-server:2.10.27
+    environment:
+      PORT: "21465"
+      HOST: http://localhost
+      SECRET_KEY: ${WPP_API_TOKEN:-replace-with-strong-wpp-secret}
+      WEBHOOK_URL: ""
+      TOKEN_STORE_TYPE: file
+      CUSTOM_USER_DATA_DIR: /usr/src/wpp-server/userDataDir/
+      MANAGER_ENABLED: "true"
+      MAX_LISTENERS: "15"
+    volumes:
+      - wppconnect_tokens:/usr/src/wpp-server/tokens
+      - wppconnect_user_data:/usr/src/wpp-server/userDataDir
+      - wppconnect_uploads:/usr/src/wpp-server/uploads
+      - wppconnect_images:/usr/src/wpp-server/WhatsAppImages
+      - wppconnect_logs:/usr/src/wpp-server/log
+    ports:
+      - "127.0.0.1:21465:21465"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:21465/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    command: ["node", "dist/scripts/migrate.js"]
+    env_file: .env
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
+
+  bootstrap:
+    build: .
+    env_file: .env
+    environment:
+      BOOTSTRAP_TENANT_ID: ${BOOTSTRAP_TENANT_ID:-local}
+      BOOTSTRAP_TENANT_NAME: ${BOOTSTRAP_TENANT_NAME:-Local}
+    entrypoint: ["/bin/sh", "-lc"]
+    command:
+      - |
+        node dist/scripts/bootstrap.js           "$$BOOTSTRAP_TENANT_ID"           "$$BOOTSTRAP_TENANT_NAME"           "$$WPP_COLLECTOR_ID"           wppconnect           FREIGHT_INTELLIGENCE
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
 
   api:
     build: .
     env_file: .env
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
       clamav:
         condition: service_healthy
-      migrate:
+      ollama-init:
         condition: service_completed_successfully
+      whisper:
+        condition: service_started
+      bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - agrolog_export:/data/agrolog-export
+    restart: unless-stopped
 
   worker:
     build: .
-    command: ["node","dist/src/worker.js"]
+    command: ["node", "dist/src/worker.js"]
     env_file: .env
     depends_on:
       postgres:
         condition: service_healthy
-      migrate:
+      clamav:
+        condition: service_healthy
+      ollama-init:
         condition: service_completed_successfully
+      whisper:
+        condition: service_started
+      wppconnect:
+        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - agrolog_export:/data/agrolog-export
+    restart: unless-stopped
 
 volumes:
   postgres_data:
   clamav_data:
+  ollama_data:
+  whisper_models:
+  wppconnect_tokens:
+  wppconnect_user_data:
+  wppconnect_uploads:
+  wppconnect_images:
+  wppconnect_logs:
+  agrolog_export:
