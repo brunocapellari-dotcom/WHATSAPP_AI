@@ -12,6 +12,7 @@ export class MemoryConversationStore implements ConversationStore {
     provider: string;
     chatId: string;
     routingAddress?: string;
+    state: 'OPEN' | 'WAITING_HUMAN' | 'HUMAN' | 'CLOSED';
   }>();
 
   async ensure(message: RawMessage) {
@@ -19,7 +20,7 @@ export class MemoryConversationStore implements ConversationStore {
     const existing = this.rows.get(key);
     if (existing) {
       if (message.routingAddress) existing.routingAddress = message.routingAddress;
-      return { conversationId: existing.conversationId, state: 'OPEN' as const };
+      return { conversationId: existing.conversationId, state: existing.state };
     }
     const conversationId = randomUUID();
     this.rows.set(key, {
@@ -28,6 +29,7 @@ export class MemoryConversationStore implements ConversationStore {
       provider: message.provider,
       chatId: message.chatId,
       ...(message.routingAddress ? { routingAddress: message.routingAddress } : {}),
+      state: 'OPEN',
     });
     return { conversationId, state: 'OPEN' as const };
   }
