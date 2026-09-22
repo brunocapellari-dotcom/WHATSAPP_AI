@@ -1,77 +1,141 @@
 # WhatsApp AI
 
-Plataforma própria de inteligência e automação sobre WhatsApp, com dois domínios no mesmo núcleo seguro:
+Plataforma própria, self-hosted e zero-cost de inteligência e automação sobre WhatsApp.
 
-- **WhatsApp Business AI** — atendimento, vendas, orçamento, pedidos, agenda, CRM, follow-up e handoff humano por ferramentas estruturadas.
-- **WhatsApp Intelligence** — coleta autorizada e tratamento de mensagens relevantes; a aplicação inicial é **WhatsApp Freight Intelligence**, que produz eventos estruturados para o AgroLog MT.
+## Domínios
 
-> **Source available, not open source.** Este repositório pode ser publicamente visível para transparência, revisão e infraestrutura de build, mas o software permanece proprietário e `UNLICENSED`. Veja `LICENSE`. Visibilidade pública não concede licença de uso, modificação, distribuição ou exploração comercial.
+- **WhatsApp Business AI** — atendimento, vendas, preços, estoque, orçamento, pedido, agenda, CRM, follow-up, aprovação humana e handoff.
+- **WhatsApp Intelligence** — coleta autorizada e tratamento de mensagens relevantes.
+- **WhatsApp Freight Intelligence** — extração/deduplicação de ofertas e embarques para o AgroLog MT.
 
-## Princípios
+> Source available, not open source. O repositório é proprietário e `UNLICENSED`. Veja `LICENSE`.
 
-- conteúdo de WhatsApp é sempre **dado não confiável**;
-- LLM interpreta, mas ações são executadas apenas por ferramentas estruturadas e políticas determinísticas;
-- multi-tenancy por `tenant_id` + PostgreSQL RLS;
-- `WhatsAppProvider` desacopla o domínio dos conectores;
-- payload original fica em quarentena criptografada e temporária; o armazenamento governado persiste somente o necessário;
-- `FreightObservation` preserva cada ocorrência; `FreightEvent` consolida reposts sem perder provenance;
-- verdade é classificada por campo: `OBSERVADO`, `INFERIDO`, `ESTIMADO`, `CONFIRMADO_EXTERNAMENTE`;
-- integração com AgroLog usa Transactional Outbox e idempotência, nunca escrita direta nas tabelas analíticas;
-- dependências e providers não são acumulados em paralelo sem necessidade demonstrada.
+## Regra de custo
 
-## Arquitetura
+`ZERO_COST_MODE=true` é o caminho canônico.
 
-```text
-WhatsApp Provider
-      |
-      v
-Webhook/Auth/Rate Limit
-      |
-      v
-Encrypted Quarantine ----> reject/discard/expire
-      |
-      +--> governed Raw Message
-              |
-              +--> BUSINESS -> Agent Runtime -> Policy -> Structured Tools -> Reply/Handoff
-              |
-              +--> FREIGHT -> Relevance -> Extraction -> Entity Resolution
-                               -> Dedup -> Quality -> FreightObservation/FreightEvent
-                               -> Outbox -> AgroLog Gateway
-```
+O sistema não exige API paga, SaaS pago, cloud gerenciada ou runner hospedado para operar. O stack padrão roda localmente com PostgreSQL, WPPConnect, Ollama/Qwen3-VL, whisper.cpp, ClamAV, FFmpeg e Poppler.
 
-O projeto é um **modular monolith** em TypeScript/Node 22. PostgreSQL é a fonte transacional; `pg-boss` executa jobs duráveis sem introduzir Redis. Temporal fica reservado para workflows distribuídos de longa duração se houver evidência de necessidade.
+Custos físicos de hardware, energia, armazenamento e conectividade continuam existindo.
+
+## Stack canônico
+
+- Node.js >= 22.12;
+- Fastify 5;
+- PostgreSQL 17;
+- pg-boss;
+- WPPConnect Server 2.10.27;
+- Ollama 0.34.2;
+- Qwen3-VL 4B Instruct;
+- whisper.cpp 1.9.4;
+- ClamAV 1.5.4;
+- SheetJS CE + Mammoth em parser isolado;
+- Semgrep CE + Gitleaks + Trivy no Release Gate.
+
+## Segurança essencial
+
+- WhatsApp é sempre dado não confiável.
+- Payload original: quarantine criptografada e temporária.
+- Dados governados: minimização e pseudonimização.
+- RLS/FORCE RLS + FKs compostas por tenant.
+- Arquivos: tamanho, magic bytes, MIME, ZIP expansion, ClamAV e parser isolado.
+- LLM local não acessa banco/shell/secrets diretamente.
+- Ferramentas são Zod/JSON-Schema + política determinística.
+- FINANCIAL/IRREVERSIBLE exigem approval request humano.
+- Handoff suspende IA.
+- Envio automático, follow-up e resposta humana usam estados anti-duplicação.
+- Resultado de entrega ambíguo nunca é reenviado automaticamente.
 
 ## Providers
 
-- `meta-cloud`: provider oficial e primário. Graph API padrão `v26.0`. `managedGroups` e `existingGroups` são capacidades diferentes; o provider oficial não é tratado como acesso geral a grupos preexistentes.
-- `wppconnect`: adapter opcional e isolado para cenários autorizados que dependam de WhatsApp Web. Ativação exige avaliação operacional, jurídica e de risco.
-- Baileys é benchmark/contingência para eventual substituição do adapter de WhatsApp Web; não roda em paralelo por padrão.
-- Evolution API não é dependência central porque duplicaria capacidades que já pertencem ao WhatsApp AI.
-- `mock`: provider determinístico exclusivo para testes.
+### WPPConnect
 
-## Segurança de conteúdo
+Caminho self-hosted para cenários autorizados de WhatsApp Web e grupos existentes.
 
-Arquivos recebidos passam por limite de tamanho, detecção de tipo por conteúdo (`file-type`), comparação com MIME declarado, malware scan e roteamento do parser somente pelo MIME validado. Arquivos desconhecidos ou inconsistentes falham fechados. Planilhas usam SheetJS CE 0.20.3 da distribuição autoritativa; a versão final deve manter artefato/lock reprodutível e atribuição de licença.
+A coleta padrão combina `all-new-messages` + `all-unread-messages`, grava o lote no durable inbox e só depois marca chats como vistos.
 
-Nunca comite `.env`, tokens, cookies, chaves privadas, sessões do WhatsApp ou dados de clientes. Vulnerabilidades devem seguir `.github/SECURITY.md`.
+### Meta Cloud
 
-## Executar localmente
+Adapter opcional. Credenciais de envio são rejeitadas enquanto `ZERO_COST_MODE=true`.
 
-1. Copie `.env.example` para `.env` e substitua segredos de exemplo.
-2. `docker compose run --rm migrate`
-3. `docker compose up --build api worker`
-4. Live: `GET /health/live`; ready: `GET /health/ready`; métricas: `GET /metrics`.
+## Freight pipeline
 
-## Testes
+```text
+message
+→ relevance
+→ extraction
+→ entity resolution
+→ deduplication
+→ quality control
+→ FreightObservation/FreightEvent
+→ transactional outbox
+→ local AgroLog NDJSON
+```
 
-`npm test` executa a matriz automatizada: Freight E2E, Business E2E, Test Lab, multimodal, provider Meta, deduplicação, entity resolution e segurança. O gate de release acrescenta lint, typecheck, migrations, PostgreSQL/RLS, build, Docker build, CodeQL `security-extended`, Gitleaks, Trivy de filesystem/imagem e `npm audit`.
+Cada campo mantém a classe epistemológica:
+`OBSERVADO`, `INFERIDO`, `ESTIMADO` ou `CONFIRMADO_EXTERNAMENTE`.
 
-O termo “100% testado” neste projeto significa **100% dos cenários obrigatórios da Acceptance Matrix aprovados na mesma versão candidata**, não uma taxa artificial de 100% de cobertura de linhas.
+## Business AI
+
+Ferramentas determinísticas:
+
+`buscar_produto`, `consultar_preco`, `consultar_estoque`, `criar_cliente`,
+`criar_lead`, `criar_orcamento`, `criar_pedido`, `consultar_pedido`,
+`agendar`, `registrar_pagamento`, `criar_followup`, `transferir_humano`.
+
+O modelo recebe o JSON Schema real de cada ferramenta. Respostas após ferramentas são sintetizadas a partir dos outputs reais.
+
+## Operação humana
+
+API interna permite:
+
+- listar e abrir fila de handoff;
+- assumir conversa;
+- responder com `requestId` idempotente;
+- liberar atendimento;
+- retomar IA;
+- encerrar;
+- listar/inspecionar/aprovar/rejeitar ações financeiras.
+
+O painel visual permanece separado e só deve ser adicionado quando trouxer ganho operacional real.
 
 ## Dados canônicos
 
-A evolução da resolução de entidades usa fontes oficiais, cacheadas localmente: IBGE para municípios, Receita Federal para CNPJ/empresas e ANTT/RNTRC para transportadores. GitHub mirrors não são fonte de verdade. CNPJ deve ser tratado como identificador textual, inclusive para inscrições alfanuméricas de 2026.
+- Municípios: IBGE.
+- Empresas: contrato NDJSON preparado para dados oficiais RFB/CNPJ.
+- Transportadores: contrato NDJSON preparado para ANTT/RNTRC.
+- IDs externos são texto; CNPJ nunca é tratado como número.
 
-## Estado operacional
+`canonical_entities` global é legível por tenants, mas gravável apenas pela identidade privilegiada de dados/migração.
 
-A arquitetura e a implementação base são executáveis sem depender de um provider específico. Produção só pode ser marcada como `OPERATIONAL` depois que **todo** o gate passar e houver testes com credenciais reais autorizadas de WhatsApp, storage/ClamAV, OpenAI, AgroLog Gateway, backup/restore e falhas em staging. Veja `docs/GAP_ANALYSIS.md`, `docs/ACCEPTANCE_MATRIX.md` e `docs/TOOLING_REVIEW_2026-09-16.md`.
+## Executar localmente
+
+1. Copie `.env.example` para `.env` e gere segredos próprios.
+2. `docker compose up --build`.
+3. Conclua a sessão autorizada do WPPConnect quando necessário.
+4. Live: `GET /health/live`.
+5. Ready: `GET /health/ready`.
+6. Metrics: `GET /metrics`.
+
+## Release Gate
+
+A candidata oficial exige `package-lock.json` comprometido e executa:
+
+```bash
+npm run release:gate
+```
+
+O gate roda lint, typecheck, migrations, todos os testes, build, container, backup/restore, npm audit, Semgrep, Gitleaks, Trivy, SBOM e validação do Compose.
+
+“100% testado” significa 100% da `docs/ACCEPTANCE_MATRIX.md` na mesma candidata — não cobertura artificial de linhas.
+
+## Estado
+
+O projeto continua em branch candidata e não deve ser considerado `OPERATIONAL` nem ser mergeado em `main` até existir `package-lock.json` reproduzível e o Release Gate integral estiver verde.
+
+Veja:
+- `docs/ARCHITECTURE.md`
+- `docs/ZERO_COST_POLICY.md`
+- `docs/TOOLING_REVIEW_2026-09-22.md`
+- `docs/GAP_ANALYSIS.md`
+- `docs/ACCEPTANCE_MATRIX.md`
