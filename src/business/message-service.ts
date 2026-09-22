@@ -23,6 +23,23 @@ export class BusinessMessageService implements BusinessMessageHandler {
       role: 'agent' as const,
       conversationId: conversation.conversationId,
     };
+
+    if (conversation.state === 'WAITING_HUMAN' || conversation.state === 'HUMAN') {
+      return {
+        reply: '',
+        handoff: true,
+        conversationId: conversation.conversationId,
+      };
+    }
+
+    if (conversation.state === 'CLOSED') {
+      return {
+        reply: '',
+        handoff: false,
+        conversationId: conversation.conversationId,
+      };
+    }
+
     const claim = await this.runs.claim(message, conversation.conversationId);
 
     if (claim.state === 'SENT') {
