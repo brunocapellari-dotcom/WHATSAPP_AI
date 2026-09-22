@@ -19,7 +19,8 @@ export interface BusinessDecisionModel {
   plan(input:{message:string;tools:Array<{name:string;description:string;risk:string}>;suspicious:boolean}):Promise<BusinessPlan>;
   finalize?(input:{message:string;plan:BusinessPlan;toolResults:BusinessToolResult[]}):Promise<{reply:string;handoff:boolean;handoffReason:string|null}>;
 }
-export interface ConversationStore { ensure(message:RawMessage):Promise<{conversationId:string}>; getRouting(tenantId:string,conversationId:string):Promise<{provider:string;routingAddress:string}|null>; }
+export type ConversationState='OPEN'|'WAITING_HUMAN'|'HUMAN'|'CLOSED';
+export interface ConversationStore { ensure(message:RawMessage):Promise<{conversationId:string;state:ConversationState}>; getRouting(tenantId:string,conversationId:string):Promise<{provider:string;routingAddress:string}|null>; }
 export type BusinessRunResult={reply:string;handoff:boolean;handoffReason:string|null};
 export type BusinessRunClaim=
   | {state:'NEW';runId:string}
