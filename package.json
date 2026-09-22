@@ -18,7 +18,9 @@
     "data:sync:ibge": "tsx scripts/sync-ibge-municipalities.ts",
     "lock:prepare": "bash scripts/prepare-lockfile.sh",
     "security:gate": "bash scripts/security-gate.sh",
-    "release:gate": "bash scripts/release-gate.sh"
+    "release:gate": "bash scripts/release-gate.sh",
+    "db:backup": "bash scripts/backup.sh",
+    "db:restore:rehearsal": "bash scripts/restore-rehearsal.sh"
   },
   "keywords": [],
   "author": "",
