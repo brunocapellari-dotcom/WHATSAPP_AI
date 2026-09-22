@@ -1,35 +1,48 @@
 # WhatsAppProvider
 
-Cada provider declara capabilities e implementa `sendText`, `normalizeInbound`, `health` e opcionalmente `downloadMedia`.
+Cada provider declara capabilities e implementa `sendText`, `normalizeInbound`, `health` e, quando aplicável, mídia e reconciliação.
 
-## Meta Cloud — PRIMARY
+## WPPConnect — ZERO-COST / EXISTING-GROUP PATH
 
-Preferido para Business AI e caminho oficial padrão. Assinatura `X-Hub-Signature-256` é validada sobre bytes brutos. O default de Graph API é `v26.0` e deve ser atualizado por configuração, nunca espalhado pelo código.
+WPPConnect Server 2.10.27 é o provider self-hosted adotado para cenários autorizados que dependem de WhatsApp Web e grupos já existentes.
 
-`managedGroups=true` somente quando explicitamente habilitado e suportado pela conta/API. `existingGroups=false` por padrão. O sistema jamais transforma “Groups API existe” em “a API oficial consegue ler qualquer grupo comum existente”.
+O caminho canônico de ingestão não depende do webhook upstream: o worker une `all-new-messages` e `all-unread-messages`, persiste cada payload no `webhook_inbox` e somente depois marca o chat como visto. Repetições são deduplicadas por message id.
 
-## WPPConnect — OPTIONAL / ISOLATED
+Webhook direto permanece opcional e só é aceito pelo WhatsApp AI com HMAC. Como o WPPConnect Server não assina webhook nativamente, esse modo exige signing proxy confiável; a configuração padrão usa reconciliação.
 
-Adapter opcional para cenários autorizados que dependam de WhatsApp Web. O projeto upstream está ativo, mas é LGPL-3.0. Mantê-lo como serviço/adaptador isolado reduz acoplamento técnico e de licença; nenhum código upstream é copiado para este repositório.
+WPPConnect Server declara Apache-2.0; a biblioteca interna `@wppconnect-team/wppconnect` declara LGPL-3.0-or-later. A separação em container externo deve ser preservada.
 
-Antes de produção: validar versão, licença/termos aplicáveis, login/recovery, armazenamento de sessão, webhook real, download de mídia, reconnect, rate limits, risco de bloqueio, privacidade e manutenção. Nunca usar para contornar restrições da plataforma.
+Uso deve respeitar acesso autorizado, termos aplicáveis e risco operacional. O projeto não implementa mecanismos para contornar restrições da plataforma.
+
+## Meta Cloud — OPTIONAL / DISABLED IN ZERO-COST
+
+O adapter oficial permanece disponível para cenários em que o proprietário decidir usar a plataforma oficial e aceitar sua política de cobrança.
+
+`ZERO_COST_MODE=true` rejeita credenciais de envio Meta na inicialização.
+
+A assinatura `X-Hub-Signature-256` é validada sobre os bytes brutos. `managedGroups` e `existingGroups` são capacidades distintas; o sistema nunca interpreta suporte a Groups API como acesso geral a grupos comuns preexistentes.
 
 ## Baileys — BENCHMARK / CONTINGENCY
 
-WhiskeySockets/Baileys é um candidato forte caso o conector opcional precise ser substituído: é ativo, MIT e baseado em socket, sem navegador completo. Não é adotado em paralelo porque isso duplicaria a função do adapter de WhatsApp Web e moveria para este projeto persistência de sessão, reconnect e compatibilidade de protocolo.
+Baileys continua referência técnica, mas a release 7 mais recente avaliada permanece RC. Adotá-lo exigiria trazer sessão, reconnect, health e API para dentro deste repositório, duplicando responsabilidade já atendida pelo WPPConnect Server.
 
-Uma troca WPPConnect → Baileys só ocorre após o mesmo corpus autorizado de grupos/mensagens provar ganho de estabilidade, custo ou governança.
+Troca só ocorre após benchmark no mesmo corpus autorizado e melhora comprovada.
 
-## Evolution API — NOT ADOPTED
+## whatsapp-web.js — NOT ADOPTED
 
-É uma plataforma ampla e ativa, mas incorpora várias capacidades que este projeto já possui: provider abstraction, integrações, filas, storage e IA. Adotá-la como dependência central agora criaria uma segunda plataforma dentro da plataforma. Pode ser reavaliada apenas como adapter externo se surgir uma necessidade concreta não atendida pelos providers existentes.
+Ativo e maduro, mas exige browser/session orchestration. Não demonstrou ganho frente ao provider atual.
+
+## Evolution API — NOT ADOPTED AS CORE
+
+É uma plataforma ampla que sobrepõe provider abstraction, automação, integrações e IA já pertencentes ao WhatsApp AI. Sua adoção criaria uma segunda plataforma e maior superfície de licença/operação.
 
 ## Provider swap test
 
-Um novo provider passa somente se:
+Um novo provider só substitui o atual quando:
 
 1. o mesmo corpus E2E produzir `RawMessage` equivalente;
-2. Business/Freight não precisarem de alteração de domínio;
-3. idempotência, mídia, grupos, reconnect e health passarem na Acceptance Matrix;
-4. segurança, privacidade, termos/licença e operação forem aprovados;
-5. o provider substituído for removido quando não houver motivo comprovado para manter ambos.
+2. Business/Freight não exigirem mudança do domínio;
+3. idempotência, mídia, grupos, reconnect/reconciliation e health passarem;
+4. segurança, privacidade e licença forem aprovadas;
+5. não houver custo obrigatório no caminho canônico;
+6. o provider substituído for removido se não houver motivo objetivo para coexistência.
