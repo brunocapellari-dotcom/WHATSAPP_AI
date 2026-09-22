@@ -20,7 +20,8 @@
     "security:gate": "bash scripts/security-gate.sh",
     "release:gate": "bash scripts/release-gate.sh",
     "db:backup": "bash scripts/backup.sh",
-    "db:restore:rehearsal": "bash scripts/restore-rehearsal.sh"
+    "db:restore:rehearsal": "bash scripts/restore-rehearsal.sh",
+    "data:import:entities": "tsx scripts/import-canonical-entities.ts"
   },
   "keywords": [],
   "author": "",
