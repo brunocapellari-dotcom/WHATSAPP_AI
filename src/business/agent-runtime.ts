@@ -1,6 +1,7 @@
 import type { BusinessDecisionModel, BusinessToolResult } from '../domain/ports.js';
 import { assessUntrustedText } from '../security/policy.js';
 import type { ToolContext, ToolRegistry } from './tool-registry.js';
+import type { ApprovalRequester } from './approval-service.js';
 
 export type AgentRole =
   | 'FRONT_DESK'
@@ -17,6 +18,7 @@ export class AgentRuntime {
   constructor(
     private readonly tools: ToolRegistry,
     private readonly model?: BusinessDecisionModel,
+    private readonly approvals?: ApprovalRequester,
   ) {}
 
   async inspectInbound(text: string) {
@@ -73,7 +75,118 @@ export class AgentRuntime {
       suspicious: inspection.security.suspicious,
     });
 
+    const preparedCalls: Array<{
+      name: string;
+      input: unknown;
+      risk: 'READ' | 'WRITE' | 'FINANCIAL' | 'IRREVERSIBLE';
+    }> = [];
+
     for (const call of plan.toolCalls) {
+      try {
+        const prepared = this.tools.prepare(call.name, call.input);
+        preparedCalls.push({
+          name: prepared.name,
+          input: prepared.input,
+          risk: prepared.risk,
+        });
+      } catch (error) {
+        toolResults.push({
+          name: call.name,
+          ok: false,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      }
+    }
+
+    if (toolResults.some((result) => !result.ok)) {
+      await this.persistHandoff('tool_validation_failure', context, toolResults);
+      return {
+        role: 'HUMAN_HANDOFF' as const,
+        reply: 'Não consegui validar uma ação automática com segurança. Vou transferir para atendimento humano.',
+        handoff: true,
+        handoffReason: 'tool_validation_failure',
+        toolResults,
+        suspiciousInput: inspection.security.suspicious,
+      };
+    }
+
+    const highRiskCalls = preparedCalls.filter(
+      (call) => call.risk === 'FINANCIAL' || call.risk === 'IRREVERSIBLE',
+    );
+
+    if (highRiskCalls.length > 0) {
+      if (
+        !this.approvals
+        || !context.conversationId
+        || !context.sourceMessageId
+      ) {
+        toolResults.push({
+          name: 'approval_workflow',
+          ok: false,
+          error: 'approval_context_unavailable',
+        });
+        await this.persistHandoff('approval_context_unavailable', context, toolResults);
+        return {
+          role: 'HUMAN_HANDOFF' as const,
+          reply: 'A ação exige aprovação humana, mas não consegui registrar a solicitação com segurança.',
+          handoff: true,
+          handoffReason: 'approval_context_unavailable',
+          toolResults,
+          suspiciousInput: inspection.security.suspicious,
+        };
+      }
+
+      for (const call of highRiskCalls) {
+        try {
+          const requested = await this.approvals.request({
+            tenantId: context.tenantId,
+            conversationId: context.conversationId,
+            sourceMessageId: context.sourceMessageId,
+            toolName: call.name,
+            risk: call.risk,
+            toolInput: call.input,
+            requestedBy: `agent:${plan.role}`,
+          });
+          toolResults.push({
+            name: call.name,
+            ok: true,
+            output: {
+              approvalId: requested.approvalId,
+              approvalStatus: requested.status,
+              executed: false,
+            },
+          });
+        } catch (error) {
+          toolResults.push({
+            name: call.name,
+            ok: false,
+            error: error instanceof Error ? error.message : 'approval_request_failed',
+          });
+        }
+      }
+
+      const approvalFailed = toolResults.some((result) => !result.ok);
+      await this.persistHandoff(
+        approvalFailed ? 'approval_request_failed' : 'human_approval_required',
+        context,
+        toolResults,
+      );
+
+      return {
+        role: 'HUMAN_HANDOFF' as const,
+        reply: approvalFailed
+          ? 'A ação exige aprovação humana, mas não consegui registrar todas as solicitações com segurança.'
+          : 'A ação solicitada exige aprovação humana antes de ser executada. O atendimento foi encaminhado para revisão.',
+        handoff: true,
+        handoffReason: approvalFailed
+          ? 'approval_request_failed'
+          : 'human_approval_required',
+        toolResults,
+        suspiciousInput: inspection.security.suspicious,
+      };
+    }
+
+    for (const call of preparedCalls) {
       try {
         const output = await this.executeTool(plan.role, call.name, call.input, context);
         toolResults.push({ name: call.name, ok: true, output });
