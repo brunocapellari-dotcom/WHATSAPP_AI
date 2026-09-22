@@ -15,6 +15,7 @@ const app = await buildHttpApp({
   localAi: runtime.localAi,
   mediaProcessor: runtime.mediaProcessor,
   operatorService: runtime.operatorService,
+  approvalService: runtime.approvalService,
 });
 
 const shutdown = async (signal: string) => {
