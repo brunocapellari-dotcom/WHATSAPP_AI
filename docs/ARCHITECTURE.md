@@ -1,38 +1,125 @@
 # Arquitetura canônica
 
+## Princípio operacional
+
+A candidata oficial opera com `ZERO_COST_MODE=true`: nenhum componente essencial depende de API paga, SaaS, runner hospedado ou cloud gerenciada.
+
+## Fluxo
+
+```text
+WPPConnect autorizado / Meta opcional
+        |
+        v
+Webhook autenticado ou Reconciliation
+        |
+        v
+Durable Webhook Inbox
+        |
+        v
+Encrypted Quarantine
+        |
+        +--> Governed Raw Message
+                |
+                +--> BUSINESS
+                |      |
+                |      +--> Local Qwen3-VL planning
+                |      +--> deterministic ToolRegistry
+                |      +--> READ/WRITE
+                |      +--> FINANCIAL/IRREVERSIBLE -> Approval Request -> Human
+                |      +--> Human Handoff -> AI suspended
+                |      +--> Operator Outbound -> idempotent delivery state
+                |      +--> Follow-up -> pg-boss -> duplicate-safe delivery
+                |
+                +--> FREIGHT
+                       |
+                       +--> relevance/extraction
+                       +--> canonical entity resolution
+                       +--> dedupe/quality
+                       +--> FreightObservation/FreightEvent
+                       +--> Transactional Outbox
+                                |
+                                +--> local NDJSON (default)
+                                +--> internal AgroLog Gateway (optional)
+```
+
 ## Bounded contexts
 
-1. **Provider & Ingestion** — webhooks, assinatura, normalização, idempotência, capabilities e health.
-2. **Privacy & Security** — quarantine criptografada, minimização, MIME/magic bytes, malware, SSRF, policy/tool authorization e audit log.
-3. **Freight Intelligence** — relevance, extraction, entity resolution, deduplication, quality, observation/event e AgroLog outbox.
-4. **Business AI** — um Agent Runtime compartilhado; Front Desk, Sales, Quote, CRM, Scheduling, Support e Human Handoff são papéis/workflows, não microserviços duplicados.
-5. **Operations** — PostgreSQL, `pg-boss`, metrics, logs, CI/CD e security gates.
+1. **Provider & Ingestion** — capabilities, auth, normalization, reconciliation, durable inbox, idempotency e health.
+2. **Privacy & Security** — quarantine criptografada, PII minimization, MIME/magic bytes, ZIP expansion limits, ClamAV, SSRF, policy, audit.
+3. **Freight Intelligence** — relevance, structured extraction, canonical entities, deduplication, quality, observations/events e outbox.
+4. **Business AI** — Agent Runtime único com Front Desk, Sales, Quote, CRM, Scheduling, Support e Human Handoff como papéis/workflows.
+5. **Human Operations** — claim/release/resume/close de conversa, envio manual idempotente e aprovação de ações de alto risco.
+6. **Operations** — PostgreSQL, pg-boss, Prometheus metrics, backup/restore rehearsal, local Release Gate e security tooling.
 
-## Modelo de dados
+## Dados principais
 
-- `quarantine_messages`: payload original criptografado, TTL e disposition.
-- `raw_messages`: evento normalizado governado, sem payload bruto aberto.
-- `freight_observations`: uma linha por observação real.
-- `freight_events`: consolidação lógica por fingerprint/offer id.
-- `outbox_events`: entrega idempotente ao AgroLog.
-- CRM: `conversations`, `customers`, `leads`, `quotes`, `orders`, `appointments`, `followups`, `payments`.
-- comércio: `products`, `product_prices`, `inventory`.
+- `webhook_inbox`: aceitação durável antes de processamento.
+- `quarantine_messages`: payload original criptografado e temporário.
+- `raw_messages`: mensagem normalizada governada.
+- `freight_observations`: cada observação real.
+- `freight_events`: evento lógico consolidado.
+- `canonical_entities`: catálogo global/tenant-scoped com provenance.
+- `business_message_runs`: idempotência e estado de entrega automática.
+- `operator_outbound_messages`: idempotência de respostas humanas.
+- `approval_requests`: workflow de aprovação financeira/irreversível.
+- `followups`: agendamento e entrega durável.
+- `outbox_events`: integração AgroLog at-least-once.
+- CRM/comércio: conversations, customers, leads, quotes, orders, appointments, payments, products, prices e inventory.
 
 ## Multi-tenancy
 
-Tabelas de domínio têm RLS + FORCE RLS. Toda operação da API usa `set_config('app.tenant_id', ..., true)` dentro de transação. `collectors` fica fora de RLS porque a resolução do webhook ocorre antes de o tenant ser conhecido; webhook autenticado + collector id resolvem o tenant. `outbox_events` também usa RLS + FORCE RLS. O worker cross-tenant usa uma identidade separada e explicitamente privilegiada (`WORKER_DATABASE_URL`), enquanto a API continua tenant-scoped.
+Tabelas de domínio usam RLS + FORCE RLS. Operações normais usam `set_config('app.tenant_id', ..., true)` dentro de transação.
 
-## Agentes
+O catálogo canônico permite SELECT de registros globais (`tenant_id IS NULL`) e do próprio tenant. Um tenant não pode inserir/alterar/apagar registros globais; carga global exige identidade privilegiada de dados/migração.
 
-Os agentes definidos pelo produto são especializações lógicas no mesmo runtime. O LLM não possui acesso direto a banco, shell, rede ou credenciais. Ele devolve plano estruturado; `ToolRegistry` valida schema, risco, tenant e aprovação antes da execução.
+Relacionamentos sensíveis usam chaves compostas `(tenant_id,id)` para impedir referência cruzada mesmo se houver bug na aplicação.
 
-## Evolução sem tool-sprawl
+O worker cross-tenant exige `WORKER_DATABASE_URL` privilegiada em produção.
 
-- **ADOPT**: PostgreSQL, pg-boss, Fastify, Zod, OpenAI Responses/Structured Outputs, Prometheus metrics, CodeQL, Gitleaks, Trivy, ClamAV.
-- **OPTIONAL PROVIDER**: WPPConnect.
-- **RESERVE**: Temporal (workflows distribuídos longos), pgvector/RAG (somente quando houver caso medido), Chatwoot (somente se substituir conscientemente a interface humana própria).
-- **REJECT AS CORE**: acoplamento direto a Baileys/Evolution/WPPConnect; Redis apenas para fila; múltiplos agent frameworks sobrepostos.
+## IA local
 
-## AI defaults
+- Runtime: Ollama.
+- Modelo default: `qwen3-vl:4b-instruct`.
+- Structured outputs: JSON Schema.
+- Texto e visão usam o mesmo modelo para reduzir redundância.
+- Áudio: whisper.cpp local.
+- PDF: Poppler + Qwen3-VL para páginas escaneadas.
+- XLSX/DOCX: parser isolado em worker thread com timeout/memory limits.
 
-The default general model is `gpt-5.6-terra` for cost/intelligence balance; audio transcription defaults to `gpt-transcribe`. Both are configuration values and may be changed without altering domain code.
+O modelo não acessa banco, shell, secrets ou rede arbitrária. Ele cria plano estruturado; ferramentas determinísticas validam schema/risco/tenant.
+
+## Entrega e idempotência
+
+Toda entrega WhatsApp segue a distinção:
+
+- falha comprovadamente pré-envio: retry permitido;
+- provider confirmou envio: persistir `SENT`;
+- resultado ambíguo ou crash após `SENDING`: `DELIVERY_UNCERTAIN`, sem reenvio automático.
+
+A regra vale para Business AI, follow-ups e mensagens humanas.
+
+## Filas e workflows
+
+`pg-boss` permanece como única fila durável sobre PostgreSQL. Não há Redis/NATS/Temporal no caminho canônico.
+
+Temporal só entra quando houver workflow distribuído de longa duração que não possa ser modelado adequadamente no estado transacional atual.
+
+## Segurança/release
+
+Release Gate self-hosted executa:
+
+- npm ci com lockfile comprometido;
+- Biome;
+- TypeScript;
+- migrations;
+- matriz completa de testes;
+- build/container;
+- backup + restore rehearsal;
+- npm audit;
+- Semgrep CE offline;
+- Gitleaks;
+- Trivy filesystem/config/image;
+- CycloneDX SBOM;
+- compose validation.
+
+Veja `ZERO_COST_POLICY.md` e `TOOLING_REVIEW_2026-09-22.md`.
