@@ -13,6 +13,7 @@ import type { LocalAiClient } from '../infra/local-ai-client.js';
 import type { LocalMediaProcessor } from '../infra/local-media-processor.js';
 import type { OperatorService } from '../business/operator-service.js';
 import type { ApprovalService } from '../business/approval-service.js';
+import type { OperatorOutboundService } from '../business/operator-outbound-service.js';
 import { constantTimeEquals, hmacSha256 } from '../security/crypto.js';
 import { verifyMetaSignature, verifyWebhookChallenge } from '../security/webhook.js';
 import { internalApiAuth } from './auth.js';
@@ -63,6 +64,7 @@ export async function buildHttpApp(input: {
   localAi?: LocalAiClient;
   mediaProcessor?: LocalMediaProcessor;
   operatorService?: OperatorService;
+  operatorOutboundService?: OperatorOutboundService;
   approvalService?: ApprovalService;
 }) {
   const app = Fastify({
@@ -323,6 +325,65 @@ export async function buildHttpApp(input: {
       },
     );
   }
+
+  const operatorMessageBodySchema = operatorBodySchema.extend({
+    requestId: z.string().uuid(),
+    text: z.string().min(1).max(4000),
+  });
+  const outboundStatusQuerySchema = z.object({
+    tenantId: tenantIdSchema,
+  });
+
+  app.post('/v1/operator/conversations/:conversationId/messages', operatorRoute, async (request, reply) => {
+    if (!input.operatorOutboundService) {
+      return reply.code(503).send({ error: 'operator_outbound_service_unavailable' });
+    }
+    const params = z.object({ conversationId: conversationIdSchema }).safeParse(request.params);
+    const body = operatorMessageBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_request' });
+
+    try {
+      const result = await input.operatorOutboundService.send({
+        ...body.data,
+        conversationId: params.data.conversationId,
+      });
+      const status = result.state === 'DELIVERY_UNCERTAIN' ? 202 : 200;
+      return reply.code(status).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'operator_send_failed';
+      if (message === 'conversation_not_found') return reply.code(404).send({ error: message });
+      if (
+        message === 'conversation_not_owned_by_operator'
+        || message === 'operator_request_id_conflict'
+        || message === 'operator_request_owner_conflict'
+        || message === 'operator_send_in_progress'
+      ) {
+        return reply.code(409).send({ error: message });
+      }
+      if (
+        message.startsWith('operator_provider_unavailable:')
+        || message === 'operator_routing_unavailable'
+      ) {
+        return reply.code(503).send({ error: message });
+      }
+      throw error;
+    }
+  });
+
+  app.get('/v1/operator/outbound/:requestId', operatorRoute, async (request, reply) => {
+    if (!input.operatorOutboundService) {
+      return reply.code(503).send({ error: 'operator_outbound_service_unavailable' });
+    }
+    const params = z.object({ requestId: z.string().uuid() }).safeParse(request.params);
+    const query = outboundStatusQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) return reply.code(400).send({ error: 'invalid_request' });
+    const result = await input.operatorOutboundService.status(
+      query.data.tenantId,
+      params.data.requestId,
+    );
+    if (!result) return reply.code(404).send({ error: 'operator_outbound_not_found' });
+    return result;
+  });
 
   const approvalIdSchema = z.string().uuid();
   const approvalStatusSchema = z.enum([
