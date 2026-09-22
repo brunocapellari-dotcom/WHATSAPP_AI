@@ -19,6 +19,14 @@ export class JobQueue {
       deadLetter: 'outbox-publish-dlq',
     });
 
+    await this.boss.createQueue('followup-deliver-dlq');
+    await this.boss.createQueue('followup-deliver', {
+      retryLimit: 5,
+      retryDelay: 30,
+      retryBackoff: true,
+      deadLetter: 'followup-deliver-dlq',
+    });
+
     await this.boss.createQueue('quarantine-purge-dlq');
     await this.boss.createQueue('quarantine-purge', {
       retryLimit: 5,
@@ -40,6 +48,14 @@ export class JobQueue {
     );
   }
 
+  async scheduleFollowups() {
+    return this.boss.send(
+      'followup-deliver',
+      {},
+      { singletonKey: 'followup-deliver', singletonSeconds: 10 },
+    );
+  }
+
   async scheduleQuarantinePurge() {
     return this.boss.send(
       'quarantine-purge',
@@ -50,6 +66,12 @@ export class JobQueue {
 
   async workOutbox(handler: () => Promise<void>) {
     await this.boss.work('outbox-publish', async () => {
+      await handler();
+    });
+  }
+
+  async workFollowups(handler: () => Promise<void>) {
+    await this.boss.work('followup-deliver', async () => {
       await handler();
     });
   }
