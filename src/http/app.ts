@@ -12,6 +12,7 @@ import type { Metrics } from '../observability/metrics.js';
 import type { LocalAiClient } from '../infra/local-ai-client.js';
 import type { LocalMediaProcessor } from '../infra/local-media-processor.js';
 import type { OperatorService } from '../business/operator-service.js';
+import type { ApprovalService } from '../business/approval-service.js';
 import { constantTimeEquals, hmacSha256 } from '../security/crypto.js';
 import { verifyMetaSignature, verifyWebhookChallenge } from '../security/webhook.js';
 import { internalApiAuth } from './auth.js';
@@ -62,6 +63,7 @@ export async function buildHttpApp(input: {
   localAi?: LocalAiClient;
   mediaProcessor?: LocalMediaProcessor;
   operatorService?: OperatorService;
+  approvalService?: ApprovalService;
 }) {
   const app = Fastify({
     logger: { level: input.config.NODE_ENV === 'test' ? 'silent' : 'info' },
@@ -321,6 +323,82 @@ export async function buildHttpApp(input: {
       },
     );
   }
+
+  const approvalIdSchema = z.string().uuid();
+  const approvalStatusSchema = z.enum([
+    'PENDING','EXECUTING','EXECUTED','REJECTED','FAILED','EXPIRED',
+  ]);
+  const approvalListQuerySchema = z.object({
+    tenantId: tenantIdSchema,
+    status: approvalStatusSchema.optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+  });
+  const approvalDetailQuerySchema = z.object({
+    tenantId: tenantIdSchema,
+  });
+  const approvalRejectBodySchema = operatorBodySchema.extend({
+    reason: z.string().min(1).max(1000).optional(),
+  });
+
+  app.get('/v1/operator/approvals', operatorRoute, async (request, reply) => {
+    if (!input.approvalService) return reply.code(503).send({ error: 'approval_service_unavailable' });
+    const query = approvalListQuerySchema.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid_request' });
+    return input.approvalService.list(query.data);
+  });
+
+  app.get('/v1/operator/approvals/:approvalId', operatorRoute, async (request, reply) => {
+    if (!input.approvalService) return reply.code(503).send({ error: 'approval_service_unavailable' });
+    const params = z.object({ approvalId: approvalIdSchema }).safeParse(request.params);
+    const query = approvalDetailQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) return reply.code(400).send({ error: 'invalid_request' });
+    const detail = await input.approvalService.detail(
+      query.data.tenantId,
+      params.data.approvalId,
+    );
+    if (!detail) return reply.code(404).send({ error: 'approval_not_found' });
+    return detail;
+  });
+
+  app.post('/v1/operator/approvals/:approvalId/approve', operatorRoute, async (request, reply) => {
+    if (!input.approvalService) return reply.code(503).send({ error: 'approval_service_unavailable' });
+    const params = z.object({ approvalId: approvalIdSchema }).safeParse(request.params);
+    const body = operatorBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_request' });
+    try {
+      return await input.approvalService.approve({
+        ...body.data,
+        approvalId: params.data.approvalId,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'approval_action_failed';
+      if (message === 'approval_not_found') return reply.code(404).send({ error: message });
+      if (message.startsWith('approval_not_pending:')) {
+        return reply.code(409).send({ error: message });
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/operator/approvals/:approvalId/reject', operatorRoute, async (request, reply) => {
+    if (!input.approvalService) return reply.code(503).send({ error: 'approval_service_unavailable' });
+    const params = z.object({ approvalId: approvalIdSchema }).safeParse(request.params);
+    const body = approvalRejectBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_request' });
+    try {
+      return await input.approvalService.reject({
+        ...body.data,
+        approvalId: params.data.approvalId,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'approval_action_failed';
+      if (message === 'approval_not_found') return reply.code(404).send({ error: message });
+      if (message.startsWith('approval_not_pending:')) {
+        return reply.code(409).send({ error: message });
+      }
+      throw error;
+    }
+  });
 
   return app;
 }
