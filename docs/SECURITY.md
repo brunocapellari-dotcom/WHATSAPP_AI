@@ -2,30 +2,74 @@
 
 ## Trust boundary
 
-WhatsApp text, URL, audio, image, PDF, spreadsheet and documents are untrusted. Instructions inside them never modify system rules or permissions.
+WhatsApp text, URL, audio, image, PDF, spreadsheet and documents are always untrusted data. Content can never modify system rules, permissions, model policy or tool authorization.
 
-Inbound path: signature/auth → rate limit → normalization → encrypted quarantine → attachment validation/malware → policy/relevance → governed storage/domain processing.
+Inbound path:
+
+```text
+provider auth/reconciliation
+→ durable inbox
+→ normalization
+→ encrypted quarantine
+→ MIME/archive/malware validation
+→ policy/relevance
+→ governed storage/domain processing
+```
 
 ## Controls
 
-- HMAC/webhook signature validation over raw bytes and constant-time comparison;
-- idempotency by provider message id and outbox idempotency key;
-- RLS/FORCE RLS for tenant domain tables;
-- AES-256-GCM quarantine encryption; HMAC pseudonymization of sender identifiers;
-- tool schemas + deterministic risk policy; financial/irreversible actions require explicit approval;
-- MIME + magic-byte validation, max size and ClamAV fail-closed processing;
-- safe URL resolver blocks localhost/private/link-local targets to reduce SSRF;
-- no shell/SQL/network tools exposed to the LLM;
-- CodeQL, Gitleaks, Trivy and npm audit in CI;
-- secrets only through environment/secret manager; `.env` ignored.
+- Meta HMAC validation over raw bytes when Meta is enabled;
+- WPP direct webhook disabled by default; optional endpoint requires HMAC signing proxy;
+- WPP canonical path uses durable reconciliation before `send-seen`;
+- replay/idempotency by provider message id, business run, request id and outbox key;
+- PostgreSQL RLS + FORCE RLS and composite tenant foreign keys;
+- global canonical catalog is read-only to tenant roles;
+- AES-256-GCM for quarantined payload, routing data and approval inputs/results;
+- HMAC pseudonymization of sender identifiers;
+- exact tool schemas from Zod converted to JSON Schema for local-model planning;
+- FINANCIAL/IRREVERSIBLE calls are persisted for human approval and never executed by agent authority;
+- human handoff suspends AI until explicit `resume-ai`;
+- manual operator messages require conversation ownership and idempotent `requestId`;
+- MIME + magic-byte validation, size limits, ZIP expansion limits and ClamAV fail closed;
+- XLSX/DOCX parser is isolated with CPU/time/memory boundary;
+- SSRF resolver blocks loopback/private/link-local targets for untrusted URLs;
+- no shell, SQL, filesystem or arbitrary network tools are exposed to the model;
+- Semgrep CE offline, Gitleaks, Trivy and npm audit run in the local Release Gate;
+- SBOM CycloneDX is generated for every release candidate.
 
-## Production gates
+## Delivery ambiguity
 
-Production requires TLS termination, managed secret vault, encrypted managed PostgreSQL/storage, least-privilege runtime identities, network egress policy, tested backups/restores, log retention and incident response. WPPConnect activation requires an explicit provider risk review.
+For any WhatsApp outbound:
+
+1. durable state is written before provider call;
+2. definite pre-delivery failure may be retried;
+3. ambiguous result becomes `DELIVERY_UNCERTAIN`;
+4. stale `SENDING` never returns automatically to send;
+5. human review is required.
+
+This prevents “retry to see if it worked” duplicates.
 
 ## Database privilege separation
 
-- The API uses `DATABASE_URL` with a tenant-scoped role subject to forced RLS.
-- Cross-tenant background delivery uses a distinct `WORKER_DATABASE_URL`; production workers must use a narrowly scoped role with `BYPASSRLS` only where operationally required.
-- Schema migration may use `MIGRATION_DATABASE_URL`; do not give the runtime API role schema-owner privileges.
-- `outbox_events` is protected by forced RLS for the API path; the privileged worker is the only cross-tenant publisher.
+- API: tenant-scoped `DATABASE_URL`.
+- Worker: separate `WORKER_DATABASE_URL` with narrowly scoped cross-tenant privileges.
+- Migrations/global catalog imports: `MIGRATION_DATABASE_URL`.
+- No runtime role should own schema in production.
+
+## Zero-cost network boundary
+
+When `ZERO_COST_MODE=true`, configuration rejects external/public endpoints for local AI, transcription and AgroLog gateway and rejects Meta sending credentials.
+
+This is a billing guardrail and an egress-reduction control; it does not replace host firewall policy.
+
+## Secrets
+
+Secrets remain outside Git:
+- .env is ignored;
+- WhatsApp sessions/tokens are mounted volumes/env only;
+- no QR/session material is committed;
+- backups and generated security artifacts are local and ignored where appropriate.
+
+## Release rule
+
+A candidate is not operational until the same commit passes the entire Acceptance Matrix, backup/restore rehearsal and security gate.
