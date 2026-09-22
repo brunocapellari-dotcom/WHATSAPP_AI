@@ -19,7 +19,7 @@ export class MemoryConversationStore implements ConversationStore {
     const existing = this.rows.get(key);
     if (existing) {
       if (message.routingAddress) existing.routingAddress = message.routingAddress;
-      return { conversationId: existing.conversationId };
+      return { conversationId: existing.conversationId, state: 'OPEN' as const };
     }
     const conversationId = randomUUID();
     this.rows.set(key, {
@@ -29,7 +29,7 @@ export class MemoryConversationStore implements ConversationStore {
       chatId: message.chatId,
       ...(message.routingAddress ? { routingAddress: message.routingAddress } : {}),
     });
-    return { conversationId };
+    return { conversationId, state: 'OPEN' as const };
   }
 
   async getRouting(tenantId: string, conversationId: string) {
@@ -47,13 +47,13 @@ export class PostgresConversationStore implements ConversationStore {
     private readonly encryptionSecret: string,
   ) {}
 
-  async ensure(message: RawMessage): Promise<{ conversationId: string }> {
+  async ensure(message: RawMessage): Promise<{ conversationId: string; state: 'OPEN' | 'WAITING_HUMAN' | 'HUMAN' | 'CLOSED' }> {
     const conversationId = randomUUID();
     const encryptedRouting = message.routingAddress
       ? encryptJson({ routingAddress: message.routingAddress }, this.encryptionSecret)
       : null;
 
-    const result = await tenantQuery<{ conversation_id: string }>(
+    const result = await tenantQuery<{ conversation_id: string; state: 'OPEN' | 'WAITING_HUMAN' | 'HUMAN' | 'CLOSED' }>(
       this.pool,
       message.tenantId,
       `INSERT INTO conversations(
@@ -64,7 +64,7 @@ export class PostgresConversationStore implements ConversationStore {
          routing_address_encrypted=COALESCE(EXCLUDED.routing_address_encrypted,conversations.routing_address_encrypted),
          last_message_at=GREATEST(COALESCE(conversations.last_message_at,EXCLUDED.last_message_at),EXCLUDED.last_message_at),
          updated_at=now()
-       RETURNING conversation_id`,
+       RETURNING conversation_id,state`,
       [
         conversationId,
         message.tenantId,
@@ -75,9 +75,9 @@ export class PostgresConversationStore implements ConversationStore {
       ],
     );
 
-    const id = result.rows[0]?.conversation_id;
-    if (!id) throw new Error('conversation_upsert_failed');
-    return { conversationId: id };
+    const row = result.rows[0];
+    if (!row?.conversation_id) throw new Error('conversation_upsert_failed');
+    return { conversationId: row.conversation_id, state: row.state };
   }
 
   async getRouting(tenantId: string, conversationId: string) {
