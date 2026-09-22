@@ -12,3 +12,4 @@ coverage/
 *.key
 *.crt
 .tmp/
+backups/
