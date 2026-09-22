@@ -6,6 +6,8 @@ import { AgroLogOutboxPublisher, LocalAgroLogOutboxPublisher } from './infra/agr
 import { QuarantineRetention } from './infra/retention.js';
 import { WebhookInbox } from './infra/webhook-inbox.js';
 import { WppReconciliationService } from './app/wpp-reconciliation-service.js';
+import { FollowupDeliveryService } from './business/followup-delivery-service.js';
+import { PostgresConversationStore } from './infra/conversations.js';
 
 const config = loadConfig();
 const workerDatabaseUrl = config.WORKER_DATABASE_URL ?? config.DATABASE_URL;
@@ -24,6 +26,15 @@ const processingRuntime = buildRuntime(config);
 const queue = new JobQueue(workerDatabaseUrl);
 const retention = new QuarantineRetention(privilegedPool);
 const inbox = new WebhookInbox(privilegedPool, config.APP_ENCRYPTION_KEY);
+const privilegedConversations = new PostgresConversationStore(
+  privilegedPool,
+  config.APP_ENCRYPTION_KEY,
+);
+const followups = new FollowupDeliveryService(
+  privilegedPool,
+  processingRuntime.providers,
+  privilegedConversations,
+);
 
 const wppProvider = processingRuntime.providers.get('wppconnect');
 const wppReconciliation = config.WPP_COLLECTOR_ID && wppProvider
@@ -59,6 +70,10 @@ if (publisher) {
     await publisher.publishBatch();
   });
 }
+
+await queue.workFollowups(async () => {
+  await followups.deliverBatch();
+});
 
 await queue.workQuarantinePurge(async () => {
   await retention.purgeExpired();
@@ -162,6 +177,10 @@ const outboxTimer = setInterval(() => {
   runBackground('outbox-schedule', () => queue.scheduleOutbox());
 }, 5_000);
 
+const followupTimer = setInterval(() => {
+  runBackground('followup-schedule', () => queue.scheduleFollowups());
+}, 10_000);
+
 const retentionTimer = setInterval(() => {
   runBackground('retention-schedule', () => queue.scheduleQuarantinePurge());
 }, 15 * 60 * 1000);
@@ -169,12 +188,14 @@ const retentionTimer = setInterval(() => {
 runBackground('webhook-inbox-drain', drainInbox);
 if (wppReconciliation) runBackground('wpp-reconciliation', reconcileWpp);
 runBackground('outbox-schedule', () => queue.scheduleOutbox());
+runBackground('followup-schedule', () => queue.scheduleFollowups());
 runBackground('retention-schedule', () => queue.scheduleQuarantinePurge());
 
 const shutdown = async () => {
   clearInterval(inboxTimer);
   if (wppReconciliationTimer) clearInterval(wppReconciliationTimer);
   clearInterval(outboxTimer);
+  clearInterval(followupTimer);
   clearInterval(retentionTimer);
   await queue.stop();
   await processingRuntime.pool.end();
