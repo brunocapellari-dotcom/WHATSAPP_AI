@@ -34,10 +34,11 @@ export class ToolRegistry {
   }
 
   list() {
-    return [...this.tools.values()].map(({ name, description, risk }) => ({
+    return [...this.tools.values()].map(({ name, description, risk, input }) => ({
       name,
       description,
       risk,
+      inputSchema: z.toJSONSchema(input) as Record<string, unknown>,
     }));
   }
 
