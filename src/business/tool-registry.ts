@@ -8,6 +8,7 @@ export type ToolContext = {
   role: 'system' | 'agent' | 'human';
   approved?: boolean;
   conversationId?: string;
+  sourceMessageId?: string;
 };
 
 type RegisteredTool<I, O> = {
@@ -40,12 +41,24 @@ export class ToolRegistry {
     }));
   }
 
+  prepare(name: string, rawInput: unknown) {
+    const tool = this.tools.get(name);
+    if (!tool) throw new Error(`unknown_tool:${name}`);
+    return {
+      name: tool.name,
+      description: tool.description,
+      risk: tool.risk,
+      input: tool.input.parse(rawInput),
+    };
+  }
+
   async call(name: string, rawInput: unknown, context: ToolContext): Promise<unknown> {
     const tool = this.tools.get(name);
     if (!tool) throw new Error(`unknown_tool:${name}`);
+    const prepared = this.prepare(name, rawInput);
 
     const authorization = authorizeTool({
-      risk: tool.risk,
+      risk: prepared.risk,
       role: context.role,
       tenantMatch: true,
       explicitlyApproved: context.approved,
@@ -61,9 +74,8 @@ export class ToolRegistry {
       throw new Error(`tool_denied:${authorization.reason}`);
     }
 
-    const input = tool.input.parse(rawInput);
     try {
-      const output = await tool.execute(input, context);
+      const output = await tool.execute(prepared.input, context);
       await this.audit.write({
         tenantId: context.tenantId,
         actor: context.actor,
