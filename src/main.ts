@@ -14,6 +14,7 @@ const app = await buildHttpApp({
   clamav: runtime.clamav,
   localAi: runtime.localAi,
   mediaProcessor: runtime.mediaProcessor,
+  operatorService: runtime.operatorService,
 });
 
 const shutdown = async (signal: string) => {
