@@ -24,6 +24,7 @@ import { AgentRuntime } from '../business/agent-runtime.js';
 import { BusinessMessageService } from '../business/message-service.js';
 import { OperatorService } from '../business/operator-service.js';
 import { ApprovalService } from '../business/approval-service.js';
+import { OperatorOutboundService } from '../business/operator-outbound-service.js';
 
 export function buildRuntime(config: AppConfig) {
   const pool = new Pool({
@@ -106,6 +107,13 @@ export function buildRuntime(config: AppConfig) {
   );
   const business = new BusinessMessageService(businessRuntime, conversations, businessRuns);
   const operatorService = new OperatorService(pool, audit);
+  const operatorOutboundService = new OperatorOutboundService(
+    pool,
+    providers,
+    conversations,
+    config.APP_ENCRYPTION_KEY,
+    audit,
+  );
   const ingestion = new IngestionService(
     collectors,
     providers,
@@ -132,6 +140,7 @@ export function buildRuntime(config: AppConfig) {
     metrics,
     businessRuntime,
     operatorService,
+    operatorOutboundService,
     approvalService,
     clamav,
     localAi,
