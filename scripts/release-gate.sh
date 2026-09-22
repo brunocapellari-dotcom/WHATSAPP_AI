@@ -76,8 +76,16 @@ npm run build
 echo "== application container build =="
 docker build -t whatsapp-ai:release-gate .
 
+echo "== backup and restore rehearsal =="
+BACKUP_DIR="$ROOT/.tmp/release-backup" bash scripts/backup.sh >/tmp/whatsapp-ai-backup-path
+BACKUP_PATH="$(cat /tmp/whatsapp-ai-backup-path | tail -n 1)"
+BACKUP_DIR="$ROOT/.tmp/release-backup" bash scripts/restore-rehearsal.sh "$BACKUP_PATH"
+
 echo "== local security gate =="
-bash scripts/security-gate.sh
+SECURITY_IMAGE=whatsapp-ai:release-gate \
+SECURITY_IMAGE_PREBUILT=true \
+SECURITY_ARTIFACT_DIR="$ROOT/.tmp/security" \
+  bash scripts/security-gate.sh
 
 echo "== compose configuration validation =="
 docker compose config --quiet
