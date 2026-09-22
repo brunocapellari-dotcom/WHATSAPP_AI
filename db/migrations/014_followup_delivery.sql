@@ -37,7 +37,7 @@ ALTER TABLE followups
 
 ALTER TABLE followups
   ADD CONSTRAINT followups_status_check
-  CHECK (status IN ('PENDING','DONE','CANCELLED','FAILED','DELIVERY_UNCERTAIN'));
+  CHECK (status IN ('PENDING','SENDING','DONE','CANCELLED','FAILED','DELIVERY_UNCERTAIN'));
 
 ALTER TABLE followups
   DROP CONSTRAINT IF EXISTS followups_conversation_id_fkey;
