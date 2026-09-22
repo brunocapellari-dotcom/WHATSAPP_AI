@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import { z } from 'zod';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import rawBody from 'fastify-raw-body';
@@ -10,6 +11,7 @@ import type { WebhookInbox } from '../infra/webhook-inbox.js';
 import type { Metrics } from '../observability/metrics.js';
 import type { LocalAiClient } from '../infra/local-ai-client.js';
 import type { LocalMediaProcessor } from '../infra/local-media-processor.js';
+import type { OperatorService } from '../business/operator-service.js';
 import { constantTimeEquals, hmacSha256 } from '../security/crypto.js';
 import { verifyMetaSignature, verifyWebhookChallenge } from '../security/webhook.js';
 import { internalApiAuth } from './auth.js';
@@ -59,6 +61,7 @@ export async function buildHttpApp(input: {
   clamav?: ClamAvScanner;
   localAi?: LocalAiClient;
   mediaProcessor?: LocalMediaProcessor;
+  operatorService?: OperatorService;
 }) {
   const app = Fastify({
     logger: { level: input.config.NODE_ENV === 'test' ? 'silent' : 'info' },
@@ -229,6 +232,95 @@ export async function buildHttpApp(input: {
       capabilities: provider.capabilities,
     })),
   );
+
+  const tenantIdSchema = z.string().min(1).max(128);
+  const conversationIdSchema = z.string().uuid();
+  const operatorReferenceSchema = z.string().min(1).max(100).regex(/^[A-Za-z0-9._:@-]+$/);
+  const operatorBodySchema = z.object({
+    tenantId: tenantIdSchema,
+    operatorReference: operatorReferenceSchema,
+  });
+  const operatorListQuerySchema = z.object({
+    tenantId: tenantIdSchema,
+    state: z.enum(['OPEN','WAITING_HUMAN','HUMAN','CLOSED']).optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+  });
+  const operatorDetailQuerySchema = z.object({
+    tenantId: tenantIdSchema,
+    messageLimit: z.coerce.number().int().min(1).max(200).optional(),
+  });
+
+  const operatorRoute = {
+    preHandler: internalApiAuth(input.config.INTERNAL_API_KEY),
+  };
+
+  app.get('/v1/operator/conversations', operatorRoute, async (request, reply) => {
+    if (!input.operatorService) return reply.code(503).send({ error: 'operator_service_unavailable' });
+    const parsed = operatorListQuerySchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid_request' });
+    return input.operatorService.list(parsed.data);
+  });
+
+  app.get('/v1/operator/conversations/:conversationId', operatorRoute, async (request, reply) => {
+    if (!input.operatorService) return reply.code(503).send({ error: 'operator_service_unavailable' });
+    const params = z.object({ conversationId: conversationIdSchema }).safeParse(request.params);
+    const query = operatorDetailQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) return reply.code(400).send({ error: 'invalid_request' });
+    const detail = await input.operatorService.detail({
+      tenantId: query.data.tenantId,
+      conversationId: params.data.conversationId,
+      messageLimit: query.data.messageLimit,
+    });
+    if (!detail) return reply.code(404).send({ error: 'conversation_not_found' });
+    return detail;
+  });
+
+  app.post('/v1/operator/conversations/:conversationId/claim', operatorRoute, async (request, reply) => {
+    if (!input.operatorService) return reply.code(503).send({ error: 'operator_service_unavailable' });
+    const params = z.object({ conversationId: conversationIdSchema }).safeParse(request.params);
+    const body = operatorBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_request' });
+    try {
+      return await input.operatorService.claim({
+        ...body.data,
+        conversationId: params.data.conversationId,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'operator_action_failed';
+      if (message === 'conversation_not_found') return reply.code(404).send({ error: message });
+      if (message === 'conversation_claim_conflict') return reply.code(409).send({ error: message });
+      throw error;
+    }
+  });
+
+  for (const [pathSuffix, action] of [
+    ['release', 'release'],
+    ['resume-ai', 'resume_ai'],
+    ['close', 'close'],
+  ] as const) {
+    app.post(
+      `/v1/operator/conversations/:conversationId/${pathSuffix}`,
+      operatorRoute,
+      async (request, reply) => {
+        if (!input.operatorService) return reply.code(503).send({ error: 'operator_service_unavailable' });
+        const params = z.object({ conversationId: conversationIdSchema }).safeParse(request.params);
+        const body = operatorBodySchema.safeParse(request.body);
+        if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_request' });
+        try {
+          return await input.operatorService.transition({
+            ...body.data,
+            conversationId: params.data.conversationId,
+            action,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'operator_action_failed';
+          if (message === 'conversation_not_found') return reply.code(404).send({ error: message });
+          if (message === 'conversation_operator_mismatch') return reply.code(409).send({ error: message });
+          throw error;
+        }
+      },
+    );
+  }
 
   return app;
 }
