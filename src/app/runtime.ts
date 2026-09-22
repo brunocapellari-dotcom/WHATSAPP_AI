@@ -22,6 +22,7 @@ import { PostgresAuditSink } from '../infra/audit.js';
 import { buildPostgresBusinessTools } from '../business/postgres-tools.js';
 import { AgentRuntime } from '../business/agent-runtime.js';
 import { BusinessMessageService } from '../business/message-service.js';
+import { OperatorService } from '../business/operator-service.js';
 
 export function buildRuntime(config: AppConfig) {
   const pool = new Pool({
@@ -93,6 +94,7 @@ export function buildRuntime(config: AppConfig) {
   const businessModel = new LocalBusinessModel(localAi);
   const businessRuntime = new AgentRuntime(businessTools, businessModel);
   const business = new BusinessMessageService(businessRuntime, conversations, businessRuns);
+  const operatorService = new OperatorService(pool, audit);
   const ingestion = new IngestionService(
     collectors,
     providers,
@@ -118,6 +120,7 @@ export function buildRuntime(config: AppConfig) {
     ingestion,
     metrics,
     businessRuntime,
+    operatorService,
     clamav,
     localAi,
     mediaProcessor,
