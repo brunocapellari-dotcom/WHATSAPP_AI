@@ -23,6 +23,7 @@ import { buildPostgresBusinessTools } from '../business/postgres-tools.js';
 import { AgentRuntime } from '../business/agent-runtime.js';
 import { BusinessMessageService } from '../business/message-service.js';
 import { OperatorService } from '../business/operator-service.js';
+import { ApprovalService } from '../business/approval-service.js';
 
 export function buildRuntime(config: AppConfig) {
   const pool = new Pool({
@@ -91,8 +92,18 @@ export function buildRuntime(config: AppConfig) {
   const conversations = new PostgresConversationStore(pool, config.APP_ENCRYPTION_KEY);
   const businessRuns = new PostgresBusinessRunStore(pool, config.APP_ENCRYPTION_KEY);
   const businessTools = buildPostgresBusinessTools(pool, config.PII_HMAC_KEY, audit);
+  const approvalService = new ApprovalService(
+    pool,
+    config.APP_ENCRYPTION_KEY,
+    businessTools,
+    audit,
+  );
   const businessModel = new LocalBusinessModel(localAi);
-  const businessRuntime = new AgentRuntime(businessTools, businessModel);
+  const businessRuntime = new AgentRuntime(
+    businessTools,
+    businessModel,
+    approvalService,
+  );
   const business = new BusinessMessageService(businessRuntime, conversations, businessRuns);
   const operatorService = new OperatorService(pool, audit);
   const ingestion = new IngestionService(
@@ -121,6 +132,7 @@ export function buildRuntime(config: AppConfig) {
     metrics,
     businessRuntime,
     operatorService,
+    approvalService,
     clamav,
     localAi,
     mediaProcessor,
