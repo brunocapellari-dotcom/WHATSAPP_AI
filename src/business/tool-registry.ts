@@ -119,9 +119,10 @@ export const BusinessToolSchemas = {
     reference: z.string(),
   }),
   criar_followup: z.object({
-    customerId: z.string(),
+    customerId: z.string().uuid(),
     at: z.string().datetime(),
-    reason: z.string().min(1),
+    reason: z.string().min(1).max(500),
+    message: z.string().min(1).max(4000),
   }),
   transferir_humano: z.object({
     reason: z.string().min(1),
