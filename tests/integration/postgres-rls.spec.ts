@@ -49,6 +49,35 @@ run('PostgreSQL tenant isolation', () => {
     expect(outboxOther.rowCount).toBe(0);
   });
 
+  it('prevents tenant roles from writing to the global canonical catalog', async () => {
+    const suffix = randomUUID();
+    const globalId = `company:global-write:${suffix}`;
+
+    await expect(withTenant(app, 'tenant-a', (client) => client.query(
+      `INSERT INTO canonical_entities(
+         entity_id,tenant_id,entity_type,canonical_name,aliases,confidence
+       ) VALUES($1,NULL,'COMPANY','Forbidden Global',ARRAY['FORBIDDEN GLOBAL'],1)`,
+      [globalId],
+    ))).rejects.toThrow();
+
+    const tenantId = `company:tenant-write:${suffix}`;
+    await expect(withTenant(app, 'tenant-a', (client) => client.query(
+      `INSERT INTO canonical_entities(
+         entity_id,tenant_id,entity_type,canonical_name,aliases,confidence
+       ) VALUES($1,'tenant-a','COMPANY','Allowed Tenant',ARRAY['ALLOWED TENANT'],1)`,
+      [tenantId],
+    ))).resolves.toMatchObject({ rowCount: 1 });
+
+    await expect(withTenant(app, 'tenant-a', (client) => client.query(
+      `UPDATE canonical_entities
+       SET canonical_name='Tampered'
+       WHERE entity_id=$1`,
+      [globalId],
+    ))).resolves.toMatchObject({ rowCount: 0 });
+
+    await admin.query('DELETE FROM canonical_entities WHERE entity_id=$1', [tenantId]);
+  });
+
   it('shares global canonical entities but isolates tenant-specific aliases', async () => {
     const suffix = randomUUID();
     const globalId = `company:global:${suffix}`;
