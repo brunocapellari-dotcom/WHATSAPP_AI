@@ -22,6 +22,7 @@ export class BusinessMessageService implements BusinessMessageHandler {
       tenantId: message.tenantId,
       role: 'agent' as const,
       conversationId: conversation.conversationId,
+      sourceMessageId: message.messageId,
     };
 
     if (conversation.state === 'WAITING_HUMAN' || conversation.state === 'HUMAN') {
