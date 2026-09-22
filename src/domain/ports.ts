@@ -16,7 +16,7 @@ export type BusinessToolCall={name:string;input:Record<string,unknown>};
 export type BusinessToolResult={name:string;ok:boolean;output?:unknown;error?:string};
 export type BusinessPlan={role:'FRONT_DESK'|'SALES'|'QUOTE'|'CRM'|'SCHEDULING'|'SUPPORT'|'HUMAN_HANDOFF';reply:string;toolCalls:BusinessToolCall[];handoff:boolean;handoffReason:string|null};
 export interface BusinessDecisionModel {
-  plan(input:{message:string;tools:Array<{name:string;description:string;risk:string}>;suspicious:boolean}):Promise<BusinessPlan>;
+  plan(input:{message:string;tools:Array<{name:string;description:string;risk:string;inputSchema?:Record<string,unknown>}>;suspicious:boolean}):Promise<BusinessPlan>;
   finalize?(input:{message:string;plan:BusinessPlan;toolResults:BusinessToolResult[]}):Promise<{reply:string;handoff:boolean;handoffReason:string|null}>;
 }
 export type ConversationState='OPEN'|'WAITING_HUMAN'|'HUMAN'|'CLOSED';
