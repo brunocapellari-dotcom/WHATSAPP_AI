@@ -1,0 +1,149 @@
+steps:
+  - id: lockfile-preflight
+    name: node:22-bookworm
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        mkdir -p /workspace/cloudbuild-artifacts
+        if [[ ! -f package-lock.json ]]; then
+          echo "package-lock.json missing: generating candidate lockfile for review"
+          npm install --package-lock-only --ignore-scripts
+          cp package-lock.json /workspace/cloudbuild-artifacts/generated-package-lock.json
+          touch /workspace/cloudbuild-artifacts/LOCKFILE_BLOCKER
+        fi
+
+  - id: persist-generated-lock
+    name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        if [[ -f /workspace/cloudbuild-artifacts/generated-package-lock.json ]]; then
+          printf '%s\n' "${COMMIT_SHA}" > /workspace/cloudbuild-artifacts/source-commit.txt
+          gcloud storage cp /workspace/cloudbuild-artifacts/generated-package-lock.json \
+            /workspace/cloudbuild-artifacts/source-commit.txt \
+            "gs://${PROJECT_ID}-ai-execution-evidence/WHATSAPP_AI/${BUILD_ID}/bootstrap/"
+        fi
+
+  - id: enforce-committed-lock
+    name: node:22-bookworm
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        if [[ -f /workspace/cloudbuild-artifacts/LOCKFILE_BLOCKER ]]; then
+          echo "BLOCKED: generated package-lock.json was stored as build evidence."
+          echo "Commit that exact lockfile, then rerun this same Cloud Build gate."
+          exit 42
+        fi
+        npm ci --ignore-scripts
+
+  - id: start-postgres
+    name: gcr.io/cloud-builders/docker
+    args:
+      - run
+      - -d
+      - --name=whatsapp-postgres
+      - --network=cloudbuild
+      - -e
+      - POSTGRES_DB=whatsapp_ai
+      - -e
+      - POSTGRES_USER=whatsapp_ai
+      - -e
+      - POSTGRES_PASSWORD=whatsapp-ci
+      - postgres:17
+
+  - id: application-gate
+    name: node:22-bookworm
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        export NODE_ENV=test
+        export ZERO_COST_MODE=true
+        export DATABASE_URL=postgres://whatsapp_ai:whatsapp-ci@whatsapp-postgres:5432/whatsapp_ai
+        export APP_ENCRYPTION_KEY="$$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')"
+        export PII_HMAC_KEY="$$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')"
+        export INTERNAL_API_KEY="$$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')"
+        export LOCAL_AI_BASE_URL=http://ollama:11434
+        export WHISPER_BASE_URL=http://whisper:8080
+        npm ci --ignore-scripts
+        npm run lint
+        npm run typecheck
+        npm run db:migrate
+        npm test
+        npm run build
+        npm audit --audit-level=high
+
+  - id: container-backup-security
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        mkdir -p /workspace/cloudbuild-artifacts/security
+        docker build --pull -t whatsapp-ai:cloudbuild .
+
+        docker exec whatsapp-postgres pg_dump \
+          --username=whatsapp_ai --dbname=whatsapp_ai --format=custom \
+          --no-owner --no-privileges > /workspace/cloudbuild-artifacts/whatsapp_ai.dump
+        test -s /workspace/cloudbuild-artifacts/whatsapp_ai.dump
+        sha256sum /workspace/cloudbuild-artifacts/whatsapp_ai.dump \
+          > /workspace/cloudbuild-artifacts/whatsapp_ai.dump.sha256
+
+        docker exec whatsapp-postgres createdb --username=whatsapp_ai whatsapp_ai_restore
+        cat /workspace/cloudbuild-artifacts/whatsapp_ai.dump | \
+          docker exec -i whatsapp-postgres pg_restore \
+            --username=whatsapp_ai --dbname=whatsapp_ai_restore \
+            --no-owner --no-privileges --exit-on-error
+
+        docker exec whatsapp-postgres psql \
+          --username=whatsapp_ai --dbname=whatsapp_ai_restore \
+          --set=ON_ERROR_STOP=1 --tuples-only --command="
+            SELECT CASE WHEN to_regclass('public.schema_migrations') IS NOT NULL THEN 1 ELSE 0 END;
+            SELECT CASE WHEN to_regclass('public.raw_messages') IS NOT NULL THEN 1 ELSE 0 END;
+            SELECT CASE WHEN to_regclass('public.freight_events') IS NOT NULL THEN 1 ELSE 0 END;
+            SELECT CASE WHEN to_regclass('public.business_message_runs') IS NOT NULL THEN 1 ELSE 0 END;
+            SELECT CASE WHEN to_regclass('public.webhook_inbox') IS NOT NULL THEN 1 ELSE 0 END;
+          " | awk 'NF { if ($$1 != 1) exit 1 }'
+
+        docker run --rm -e SEMGREP_SEND_METRICS=off -v /workspace:/src \
+          semgrep/semgrep:1.177.0 \
+          semgrep scan --metrics=off --error --config=/src/.semgrep.yml /src/src /src/scripts
+
+        docker run --rm -v /workspace:/repo ghcr.io/gitleaks/gitleaks:v8.30.1 \
+          dir /repo --redact --no-banner
+
+        docker run --rm -v /workspace:/work -w /work aquasec/trivy:0.74.0 \
+          fs --scanners vuln,misconfig --severity HIGH,CRITICAL \
+          --exit-code 1 --ignore-unfixed .
+
+        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 \
+          image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \
+          --ignore-unfixed whatsapp-ai:cloudbuild
+
+        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+          -v /workspace/cloudbuild-artifacts/security:/out aquasec/trivy:0.74.0 \
+          image --format cyclonedx --output /out/sbom.cdx.json whatsapp-ai:cloudbuild
+
+        test -s /workspace/cloudbuild-artifacts/security/sbom.cdx.json
+        printf 'FULL_PROJECT_GATE_OK\n' > /workspace/cloudbuild-gate-summary.txt
+
+  - id: persist-evidence
+    name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        printf '%s\n' "${COMMIT_SHA}" > /workspace/source-commit.txt
+        gcloud storage cp /workspace/cloudbuild-gate-summary.txt /workspace/source-commit.txt \
+          /workspace/cloudbuild-artifacts/whatsapp_ai.dump.sha256 \
+          /workspace/cloudbuild-artifacts/security/sbom.cdx.json \
+          "gs://${PROJECT_ID}-ai-execution-evidence/WHATSAPP_AI/${BUILD_ID}/"
+
+timeout: 7200s
+serviceAccount: "projects/${PROJECT_ID}/serviceAccounts/ai-build-executor@${PROJECT_ID}.iam.gserviceaccount.com"
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
