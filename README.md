@@ -106,7 +106,7 @@ O painel visual permanece separado e só deve ser adicionado quando trouxer ganh
 
 - Municípios: IBGE.
 - Empresas: contrato NDJSON preparado para dados oficiais RFB/CNPJ.
-- Transportadores: contrato NDJSON preparado para ANTT/RNTRC.
+- Transportadores: sincronização direta do datastore oficial ANTT/RNTRC; importa somente organizações ativas e exclui CPF/TAC do catálogo global.
 - IDs externos são texto; CNPJ nunca é tratado como número.
 
 `canonical_entities` global é legível por tenants, mas gravável apenas pela identidade privilegiada de dados/migração. `canonical_entity_aliases` mantém índices `pg_trgm`; matches registram `EXACT`, `FUZZY` ou `FALLBACK` com confiança no próprio FreightObservation.
