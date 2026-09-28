@@ -14,9 +14,10 @@ import type { LocalMediaProcessor } from '../infra/local-media-processor.js';
 import type { OperatorService } from '../business/operator-service.js';
 import type { ApprovalService } from '../business/approval-service.js';
 import type { OperatorOutboundService } from '../business/operator-outbound-service.js';
+import type { OperatorAuthService } from '../business/operator-auth-service.js';
 import { constantTimeEquals, hmacSha256 } from '../security/crypto.js';
 import { verifyMetaSignature, verifyWebhookChallenge } from '../security/webhook.js';
-import { internalApiAuth } from './auth.js';
+import { internalApiAuth, operatorApiAuth, requireOperatorIdentity } from './auth.js';
 
 type QueueInboundResult = { status: number; outcome: 'queued' | 'duplicate' | 'rejected'; body: Record<string, unknown> };
 
@@ -64,6 +65,7 @@ export async function buildHttpApp(input: {
   localAi?: LocalAiClient;
   mediaProcessor?: LocalMediaProcessor;
   operatorService?: OperatorService;
+  operatorAuthService?: OperatorAuthService;
   operatorOutboundService?: OperatorOutboundService;
   approvalService?: ApprovalService;
 }) {
@@ -240,38 +242,47 @@ export async function buildHttpApp(input: {
   const tenantIdSchema = z.string().min(1).max(128);
   const conversationIdSchema = z.string().uuid();
   const operatorReferenceSchema = z.string().min(1).max(100).regex(/^[A-Za-z0-9._:@-]+$/);
-  const operatorBodySchema = z.object({
-    tenantId: tenantIdSchema,
-    operatorReference: operatorReferenceSchema,
-  });
+  const operatorRoleSchema = z.enum(['OPERATOR','SUPERVISOR','ADMIN']);
+
+  const operatorRoute = {
+    preHandler: input.operatorAuthService
+      ? operatorApiAuth(input.operatorAuthService)
+      : async (_request: unknown, reply: { code(status: number): { send(body: unknown): unknown } }) =>
+          reply.code(503).send({ error: 'operator_auth_unavailable' }),
+  };
+  const supervisorRoute = {
+    preHandler: input.operatorAuthService
+      ? operatorApiAuth(input.operatorAuthService, ['SUPERVISOR','ADMIN'])
+      : async (_request: unknown, reply: { code(status: number): { send(body: unknown): unknown } }) =>
+          reply.code(503).send({ error: 'operator_auth_unavailable' }),
+  };
   const operatorListQuerySchema = z.object({
-    tenantId: tenantIdSchema,
     state: z.enum(['OPEN','WAITING_HUMAN','HUMAN','CLOSED']).optional(),
     limit: z.coerce.number().int().min(1).max(200).optional(),
   });
   const operatorDetailQuerySchema = z.object({
-    tenantId: tenantIdSchema,
     messageLimit: z.coerce.number().int().min(1).max(200).optional(),
   });
 
-  const operatorRoute = {
-    preHandler: internalApiAuth(input.config.INTERNAL_API_KEY),
-  };
-
   app.get('/v1/operator/conversations', operatorRoute, async (request, reply) => {
     if (!input.operatorService) return reply.code(503).send({ error: 'operator_service_unavailable' });
+    const identity = requireOperatorIdentity(request);
     const parsed = operatorListQuerySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: 'invalid_request' });
-    return input.operatorService.list(parsed.data);
+    return input.operatorService.list({
+      tenantId: identity.tenantId,
+      ...parsed.data,
+    });
   });
 
   app.get('/v1/operator/conversations/:conversationId', operatorRoute, async (request, reply) => {
     if (!input.operatorService) return reply.code(503).send({ error: 'operator_service_unavailable' });
+    const identity = requireOperatorIdentity(request);
     const params = z.object({ conversationId: conversationIdSchema }).safeParse(request.params);
     const query = operatorDetailQuerySchema.safeParse(request.query);
     if (!params.success || !query.success) return reply.code(400).send({ error: 'invalid_request' });
     const detail = await input.operatorService.detail({
-      tenantId: query.data.tenantId,
+      tenantId: identity.tenantId,
       conversationId: params.data.conversationId,
       messageLimit: query.data.messageLimit,
     });
@@ -281,12 +292,13 @@ export async function buildHttpApp(input: {
 
   app.post('/v1/operator/conversations/:conversationId/claim', operatorRoute, async (request, reply) => {
     if (!input.operatorService) return reply.code(503).send({ error: 'operator_service_unavailable' });
+    const identity = requireOperatorIdentity(request);
     const params = z.object({ conversationId: conversationIdSchema }).safeParse(request.params);
-    const body = operatorBodySchema.safeParse(request.body);
-    if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_request' });
+    if (!params.success) return reply.code(400).send({ error: 'invalid_request' });
     try {
       return await input.operatorService.claim({
-        ...body.data,
+        tenantId: identity.tenantId,
+        operatorReference: identity.operatorReference,
         conversationId: params.data.conversationId,
       });
     } catch (error) {
@@ -307,12 +319,13 @@ export async function buildHttpApp(input: {
       operatorRoute,
       async (request, reply) => {
         if (!input.operatorService) return reply.code(503).send({ error: 'operator_service_unavailable' });
+        const identity = requireOperatorIdentity(request);
         const params = z.object({ conversationId: conversationIdSchema }).safeParse(request.params);
-        const body = operatorBodySchema.safeParse(request.body);
-        if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_request' });
+        if (!params.success) return reply.code(400).send({ error: 'invalid_request' });
         try {
           return await input.operatorService.transition({
-            ...body.data,
+            tenantId: identity.tenantId,
+            operatorReference: identity.operatorReference,
             conversationId: params.data.conversationId,
             action,
           });
@@ -326,24 +339,24 @@ export async function buildHttpApp(input: {
     );
   }
 
-  const operatorMessageBodySchema = operatorBodySchema.extend({
+  const operatorMessageBodySchema = z.object({
     requestId: z.string().uuid(),
     text: z.string().min(1).max(4000),
-  });
-  const outboundStatusQuerySchema = z.object({
-    tenantId: tenantIdSchema,
   });
 
   app.post('/v1/operator/conversations/:conversationId/messages', operatorRoute, async (request, reply) => {
     if (!input.operatorOutboundService) {
       return reply.code(503).send({ error: 'operator_outbound_service_unavailable' });
     }
+    const identity = requireOperatorIdentity(request);
     const params = z.object({ conversationId: conversationIdSchema }).safeParse(request.params);
     const body = operatorMessageBodySchema.safeParse(request.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_request' });
 
     try {
       const result = await input.operatorOutboundService.send({
+        tenantId: identity.tenantId,
+        operatorReference: identity.operatorReference,
         ...body.data,
         conversationId: params.data.conversationId,
       });
@@ -374,11 +387,11 @@ export async function buildHttpApp(input: {
     if (!input.operatorOutboundService) {
       return reply.code(503).send({ error: 'operator_outbound_service_unavailable' });
     }
+    const identity = requireOperatorIdentity(request);
     const params = z.object({ requestId: z.string().uuid() }).safeParse(request.params);
-    const query = outboundStatusQuerySchema.safeParse(request.query);
-    if (!params.success || !query.success) return reply.code(400).send({ error: 'invalid_request' });
+    if (!params.success) return reply.code(400).send({ error: 'invalid_request' });
     const result = await input.operatorOutboundService.status(
-      query.data.tenantId,
+      identity.tenantId,
       params.data.requestId,
     );
     if (!result) return reply.code(404).send({ error: 'operator_outbound_not_found' });
@@ -390,45 +403,46 @@ export async function buildHttpApp(input: {
     'PENDING','EXECUTING','EXECUTED','REJECTED','FAILED','EXPIRED',
   ]);
   const approvalListQuerySchema = z.object({
-    tenantId: tenantIdSchema,
     status: approvalStatusSchema.optional(),
     limit: z.coerce.number().int().min(1).max(200).optional(),
   });
-  const approvalDetailQuerySchema = z.object({
-    tenantId: tenantIdSchema,
-  });
-  const approvalRejectBodySchema = operatorBodySchema.extend({
+  const approvalRejectBodySchema = z.object({
     reason: z.string().min(1).max(1000).optional(),
   });
 
   app.get('/v1/operator/approvals', operatorRoute, async (request, reply) => {
     if (!input.approvalService) return reply.code(503).send({ error: 'approval_service_unavailable' });
+    const identity = requireOperatorIdentity(request);
     const query = approvalListQuerySchema.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: 'invalid_request' });
-    return input.approvalService.list(query.data);
+    return input.approvalService.list({
+      tenantId: identity.tenantId,
+      ...query.data,
+    });
   });
 
   app.get('/v1/operator/approvals/:approvalId', operatorRoute, async (request, reply) => {
     if (!input.approvalService) return reply.code(503).send({ error: 'approval_service_unavailable' });
+    const identity = requireOperatorIdentity(request);
     const params = z.object({ approvalId: approvalIdSchema }).safeParse(request.params);
-    const query = approvalDetailQuerySchema.safeParse(request.query);
-    if (!params.success || !query.success) return reply.code(400).send({ error: 'invalid_request' });
+    if (!params.success) return reply.code(400).send({ error: 'invalid_request' });
     const detail = await input.approvalService.detail(
-      query.data.tenantId,
+      identity.tenantId,
       params.data.approvalId,
     );
     if (!detail) return reply.code(404).send({ error: 'approval_not_found' });
     return detail;
   });
 
-  app.post('/v1/operator/approvals/:approvalId/approve', operatorRoute, async (request, reply) => {
+  app.post('/v1/operator/approvals/:approvalId/approve', supervisorRoute, async (request, reply) => {
     if (!input.approvalService) return reply.code(503).send({ error: 'approval_service_unavailable' });
+    const identity = requireOperatorIdentity(request);
     const params = z.object({ approvalId: approvalIdSchema }).safeParse(request.params);
-    const body = operatorBodySchema.safeParse(request.body);
-    if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_request' });
+    if (!params.success) return reply.code(400).send({ error: 'invalid_request' });
     try {
       return await input.approvalService.approve({
-        ...body.data,
+        tenantId: identity.tenantId,
+        operatorReference: identity.operatorReference,
         approvalId: params.data.approvalId,
       });
     } catch (error) {
@@ -441,14 +455,17 @@ export async function buildHttpApp(input: {
     }
   });
 
-  app.post('/v1/operator/approvals/:approvalId/reject', operatorRoute, async (request, reply) => {
+  app.post('/v1/operator/approvals/:approvalId/reject', supervisorRoute, async (request, reply) => {
     if (!input.approvalService) return reply.code(503).send({ error: 'approval_service_unavailable' });
+    const identity = requireOperatorIdentity(request);
     const params = z.object({ approvalId: approvalIdSchema }).safeParse(request.params);
     const body = approvalRejectBodySchema.safeParse(request.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_request' });
     try {
       return await input.approvalService.reject({
-        ...body.data,
+        tenantId: identity.tenantId,
+        operatorReference: identity.operatorReference,
+        reason: body.data.reason,
         approvalId: params.data.approvalId,
       });
     } catch (error) {
@@ -460,6 +477,63 @@ export async function buildHttpApp(input: {
       throw error;
     }
   });
+
+  const adminTokenBodySchema = z.object({
+    tenantId: tenantIdSchema,
+    operatorReference: operatorReferenceSchema,
+    role: operatorRoleSchema,
+    label: z.string().min(1).max(200).optional(),
+    expiresAt: z.coerce.date().nullable().optional(),
+  });
+
+  app.post(
+    '/v1/admin/operator-tokens',
+    { preHandler: internalApiAuth(input.config.INTERNAL_API_KEY) },
+    async (request, reply) => {
+      if (!input.operatorAuthService) {
+        return reply.code(503).send({ error: 'operator_auth_unavailable' });
+      }
+      const body = adminTokenBodySchema.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: 'invalid_request' });
+      return input.operatorAuthService.issue({
+        ...body.data,
+        actor: 'internal-admin',
+      });
+    },
+  );
+
+  app.get(
+    '/v1/admin/operator-tokens',
+    { preHandler: internalApiAuth(input.config.INTERNAL_API_KEY) },
+    async (request, reply) => {
+      if (!input.operatorAuthService) {
+        return reply.code(503).send({ error: 'operator_auth_unavailable' });
+      }
+      const query = z.object({ tenantId: tenantIdSchema }).safeParse(request.query);
+      if (!query.success) return reply.code(400).send({ error: 'invalid_request' });
+      return input.operatorAuthService.list(query.data.tenantId);
+    },
+  );
+
+  app.post(
+    '/v1/admin/operator-tokens/:tokenId/revoke',
+    { preHandler: internalApiAuth(input.config.INTERNAL_API_KEY) },
+    async (request, reply) => {
+      if (!input.operatorAuthService) {
+        return reply.code(503).send({ error: 'operator_auth_unavailable' });
+      }
+      const params = z.object({ tokenId: z.string().uuid() }).safeParse(request.params);
+      const body = z.object({ tenantId: tenantIdSchema }).safeParse(request.body);
+      if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_request' });
+      const revoked = await input.operatorAuthService.revoke({
+        tenantId: body.data.tenantId,
+        tokenId: params.data.tokenId,
+        actor: 'internal-admin',
+      });
+      if (!revoked) return reply.code(404).send({ error: 'operator_token_not_found' });
+      return { revoked: true };
+    },
+  );
 
   return app;
 }
