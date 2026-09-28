@@ -47,6 +47,7 @@ export function buildRuntime(config: AppConfig) {
   const localAi = new LocalAiClient({
     baseUrl: config.LOCAL_AI_BASE_URL,
     model: config.LOCAL_AI_MODEL,
+    expectedDigest: config.LOCAL_AI_MODEL_DIGEST,
     timeoutMs: config.LOCAL_AI_TIMEOUT_MS,
     observeUsage,
   });
