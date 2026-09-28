@@ -78,6 +78,52 @@ run('PostgreSQL tenant isolation', () => {
     await admin.query('DELETE FROM canonical_entities WHERE entity_id=$1', [tenantId]);
   });
 
+  it('allows tenants to read global canonical entities but forbids writing the global namespace', async () => {
+    const suffix = randomUUID();
+    const globalId = `company:global-write-guard:${suffix}`;
+    const tenantId = `company:tenant-write:${suffix}`;
+
+    await admin.query(
+      `INSERT INTO canonical_entities(entity_id,tenant_id,entity_type,canonical_name,aliases,confidence)
+       VALUES($1,NULL,'COMPANY','Global Readable',ARRAY[$2],1)`,
+      [globalId, `GLOBAL-${suffix}`],
+    );
+
+    try {
+      const visible = await withTenant(app, 'tenant-a', (client) => client.query(
+        `SELECT entity_id FROM canonical_entities WHERE entity_id=$1`,
+        [globalId],
+      ));
+      expect(visible.rowCount).toBe(1);
+
+      await expect(withTenant(app, 'tenant-a', (client) => client.query(
+        `INSERT INTO canonical_entities(
+           entity_id,tenant_id,entity_type,canonical_name,aliases,confidence
+         ) VALUES($1,NULL,'COMPANY','Tenant Tried Global',ARRAY[$2],1)`,
+        [`company:forbidden-global:${suffix}`, `FORBIDDEN-${suffix}`],
+      ))).rejects.toThrow();
+
+      await expect(withTenant(app, 'tenant-a', (client) => client.query(
+        `UPDATE canonical_entities
+         SET canonical_name='Tenant Changed Global'
+         WHERE entity_id=$1`,
+        [globalId],
+      ))).resolves.toMatchObject({ rowCount: 0 });
+
+      await expect(withTenant(app, 'tenant-a', (client) => client.query(
+        `INSERT INTO canonical_entities(
+           entity_id,tenant_id,entity_type,canonical_name,aliases,confidence
+         ) VALUES($1,'tenant-a','COMPANY','Tenant Owned',ARRAY[$2],1)`,
+        [tenantId, `TENANT-${suffix}`],
+      ))).resolves.toMatchObject({ rowCount: 1 });
+    } finally {
+      await admin.query(
+        `DELETE FROM canonical_entities WHERE entity_id = ANY($1::text[])`,
+        [[globalId, tenantId, `company:forbidden-global:${suffix}`]],
+      );
+    }
+  });
+
   it('shares global canonical entities but isolates tenant-specific aliases', async () => {
     const suffix = randomUUID();
     const globalId = `company:global:${suffix}`;
