@@ -124,6 +124,52 @@ run('PostgreSQL tenant isolation', () => {
     }
   });
 
+  it('isolates operator tokens and prevents cross-tenant token creation', async () => {
+    const tokenA = randomUUID();
+    const tokenB = randomUUID();
+
+    await withTenant(app, 'tenant-a', (client) => client.query(
+      `INSERT INTO operator_tokens(
+         token_id,tenant_id,operator_reference,role,token_hash
+       ) VALUES($1,'tenant-a','operator-a','OPERATOR',$2)`,
+      [tokenA, 'hash-' + tokenA],
+    ));
+    await withTenant(app, 'tenant-b', (client) => client.query(
+      `INSERT INTO operator_tokens(
+         token_id,tenant_id,operator_reference,role,token_hash
+       ) VALUES($1,'tenant-b','operator-b','OPERATOR',$2)`,
+      [tokenB, 'hash-' + tokenB],
+    ));
+
+    const none = await app.query(
+      'SELECT token_id FROM operator_tokens WHERE token_id = ANY($1::uuid[])',
+      [[tokenA, tokenB]],
+    );
+    expect(none.rowCount).toBe(0);
+
+    const tenantA = await withTenant(app, 'tenant-a', (client) => client.query(
+      'SELECT token_id FROM operator_tokens WHERE token_id = ANY($1::uuid[])',
+      [[tokenA, tokenB]],
+    ));
+    expect(tenantA.rows.map((row) => row.token_id)).toEqual([tokenA]);
+
+    await expect(withTenant(app, 'tenant-a', (client) => client.query(
+      `INSERT INTO operator_tokens(
+         token_id,tenant_id,operator_reference,role,token_hash
+       ) VALUES($1,'tenant-b','forbidden','OPERATOR',$2)`,
+      [randomUUID(), 'hash-forbidden-' + randomUUID()],
+    ))).rejects.toThrow();
+
+    await withTenant(app, 'tenant-a', (client) => client.query(
+      'DELETE FROM operator_tokens WHERE token_id=$1',
+      [tokenA],
+    ));
+    await withTenant(app, 'tenant-b', (client) => client.query(
+      'DELETE FROM operator_tokens WHERE token_id=$1',
+      [tokenB],
+    ));
+  });
+
   it('shares global canonical entities but isolates tenant-specific aliases', async () => {
     const suffix = randomUUID();
     const globalId = `company:global:${suffix}`;
