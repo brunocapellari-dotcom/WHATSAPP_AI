@@ -27,6 +27,21 @@ if [[ ! -f package-lock.json ]]; then
   exit 1
 fi
 
+echo "== direct dependency provenance =="
+REMOTE_DEPENDENCIES="$(node --input-type=module -e '
+  import fs from "node:fs";
+  const pkg = JSON.parse(fs.readFileSync("package.json","utf8"));
+  const deps = {...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {})};
+  for (const [name, spec] of Object.entries(deps)) {
+    if (/^https?:\/\//i.test(String(spec))) console.log(name + "=" + spec);
+  }
+')"
+if [[ -n "$REMOTE_DEPENDENCIES" ]]; then
+  echo "Release blocked: direct HTTP dependencies must be vendored and committed:" >&2
+  echo "$REMOTE_DEPENDENCIES" >&2
+  exit 1
+fi
+
 if ! git diff --quiet -- package.json package-lock.json; then
   echo "package manifest/lockfile has uncommitted changes." >&2
   exit 1
