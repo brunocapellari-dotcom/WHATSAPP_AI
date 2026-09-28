@@ -12,7 +12,7 @@
 ### Inicialização
 
 1. Copie `.env.example` para `.env`.
-2. Gere segredos próprios para encryption/HMAC/internal API/WPP.
+2. Gere segredos próprios para PostgreSQL, encryption/HMAC, internal API e WPP. Não use os placeholders do `.env.example`.
 3. Execute `docker compose up --build`.
 4. O Compose:
    - sobe PostgreSQL;
@@ -38,7 +38,11 @@ O worker concentra funções cross-tenant controladas:
 
 Em produção, ele exige `WORKER_DATABASE_URL` própria. A API não deve compartilhar privilégios BYPASSRLS.
 
-## Business / handoff
+## Operadores, autenticação e handoff
+
+O administrador interno emite tokens locais por `POST /v1/admin/operator-tokens` usando `INTERNAL_API_KEY`. O token plaintext é exibido apenas na emissão; o banco guarda somente SHA-256. Papéis: `OPERATOR`, `SUPERVISOR`, `ADMIN`.
+
+Todas as rotas `/v1/operator/*` usam o token do operador como bearer. O cliente não envia `tenantId` nem `operatorReference`; ambos são derivados do token. Listagem/decisão de approvals exige `SUPERVISOR` ou `ADMIN`. Tokens podem expirar e ser revogados pela API administrativa.
 
 Quando `transferir_humano` é persistido:
 
@@ -89,6 +93,10 @@ Arquivo é sincronizado com `fsync` antes de marcar outbox como publicado. Pode 
 
 HTTP Gateway é opcional e, em zero-cost mode, precisa ser endpoint privado/local.
 
+## Container hardening
+
+API, worker, migrate e bootstrap usam filesystem read-only, `no-new-privileges` e `cap_drop: ALL`; somente `/tmp` e volumes necessários permanecem graváveis. API, PostgreSQL e WPPConnect são expostos no host apenas em loopback no Compose canônico.
+
 ## Backup
 
 Criar backup:
@@ -121,7 +129,7 @@ Empresas/transportadoras/outros catálogos normalizados:
 npm run data:import:entities -- arquivo.ndjson
 ```
 
-Carga global em produção exige `MIGRATION_DATABASE_URL`.
+Carga global em produção exige `MIGRATION_DATABASE_URL`. A resolução consulta alias exato primeiro; em entradas com pelo menos 5 caracteres pode usar `pg_trgm` com limiar conservador e margem de ambiguidade. O método (`EXACT`, `FUZZY`, `FALLBACK`) e confiança são preservados no FreightObservation.
 
 ## Release
 
