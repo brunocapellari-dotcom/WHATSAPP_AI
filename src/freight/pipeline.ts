@@ -43,11 +43,23 @@ export class FreightPipeline {
     const fields = await extractFreight(message.text ?? '', this.llm);
     const quality = assessFreightQuality(fields);
 
-    const [origin, destination, company, carrier, product] = await Promise.all([
+    const [
+      origin,
+      destination,
+      company,
+      shipper,
+      carrier,
+      loadingPlace,
+      unloadingPlace,
+      product,
+    ] = await Promise.all([
       this.resolver.resolveCity(fields.origin.value, message.tenantId),
       this.resolver.resolveCity(fields.destination.value, message.tenantId),
       this.resolver.resolveCompany(fields.company.value, message.tenantId),
-      this.resolver.resolveCompany(fields.carrier.value, message.tenantId),
+      this.resolver.resolveCompany(fields.shipper.value, message.tenantId),
+      this.resolver.resolveCarrier(fields.carrier.value, message.tenantId),
+      this.resolver.resolveFacility(fields.loadingPlace.value, message.tenantId),
+      this.resolver.resolveFacility(fields.unloadingPlace.value, message.tenantId),
       this.resolver.resolveProduct(fields.product.value, message.tenantId),
     ]);
 
@@ -56,13 +68,19 @@ export class FreightPipeline {
       originId: origin?.id ?? null,
       destinationId: destination?.id ?? null,
       companyId: company?.id ?? null,
+      shipperId: shipper?.id ?? null,
       carrierId: carrier?.id ?? null,
+      loadingPlaceId: loadingPlace?.id ?? null,
+      unloadingPlaceId: unloadingPlace?.id ?? null,
       resolution: {
         product: product ? { method: product.matchMethod, confidence: product.confidence } : null,
         origin: origin ? { method: origin.matchMethod, confidence: origin.confidence } : null,
         destination: destination ? { method: destination.matchMethod, confidence: destination.confidence } : null,
         company: company ? { method: company.matchMethod, confidence: company.confidence } : null,
+        shipper: shipper ? { method: shipper.matchMethod, confidence: shipper.confidence } : null,
         carrier: carrier ? { method: carrier.matchMethod, confidence: carrier.confidence } : null,
+        loadingPlace: loadingPlace ? { method: loadingPlace.matchMethod, confidence: loadingPlace.confidence } : null,
+        unloadingPlace: unloadingPlace ? { method: unloadingPlace.matchMethod, confidence: unloadingPlace.confidence } : null,
       },
     };
 
@@ -76,7 +94,10 @@ export class FreightPipeline {
       ['origin', origin],
       ['destination', destination],
       ['company', company],
+      ['shipper', shipper],
       ['carrier', carrier],
+      ['loadingPlace', loadingPlace],
+      ['unloadingPlace', unloadingPlace],
       ['product', product],
     ];
     const resolutionIssues = resolutionEntries.flatMap(([fieldName, resolved]) => {
