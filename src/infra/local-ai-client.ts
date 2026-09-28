@@ -20,6 +20,7 @@ export class LocalAiClient {
   constructor(private readonly options: {
     baseUrl: string;
     model: string;
+    expectedDigest?: string;
     timeoutMs: number;
     observeUsage?: AiUsageObserver;
   }) {}
@@ -85,16 +86,30 @@ export class LocalAiClient {
         { signal: AbortSignal.timeout(Math.min(this.options.timeoutMs, 5_000)) },
       );
       if (!response.ok) return { ok: false, details: { status: response.status } };
-      const body = await response.json() as { models?: Array<{ name?: string; model?: string }> };
-      const names = (body.models ?? []).flatMap((x) => [x.name, x.model]).filter(Boolean);
-      const exact = names.includes(this.options.model);
-      const family = names.some((name) => String(name).split(':')[0] === this.options.model.split(':')[0]);
+      const body = await response.json() as {
+        models?: Array<{ name?: string; model?: string; digest?: string }>;
+      };
+      const rows = body.models ?? [];
+      const exactRow = rows.find((row) =>
+        row.name === this.options.model || row.model === this.options.model
+      );
+      const familyRow = rows.find((row) =>
+        String(row.name ?? row.model ?? '').split(':')[0]
+          === this.options.model.split(':')[0]
+      );
+      const selected = exactRow ?? familyRow;
+      const digest = selected?.digest?.toLowerCase() ?? null;
+      const expectedDigest = this.options.expectedDigest?.toLowerCase() ?? null;
+      const digestMatches = expectedDigest == null || digest === expectedDigest;
       return {
-        ok: exact || family,
+        ok: Boolean(selected) && digestMatches,
         details: {
           model: this.options.model,
-          installed: exact,
-          compatibleFamilyPresent: family,
+          installed: Boolean(exactRow),
+          compatibleFamilyPresent: Boolean(familyRow),
+          digest,
+          expectedDigest,
+          digestMatches,
         },
       };
     } catch (error) {
