@@ -76,6 +76,7 @@ const ConfigSchema = z.object({
 
   LOCAL_AI_BASE_URL: z.string().url().default('http://127.0.0.1:11434'),
   LOCAL_AI_MODEL: z.string().min(1).default('qwen3-vl:4b-instruct'),
+  LOCAL_AI_MODEL_DIGEST: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   LOCAL_AI_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(10 * 60_000).default(120_000),
   WHISPER_BASE_URL: z.string().url().default('http://127.0.0.1:8080'),
   WHISPER_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(10 * 60_000).default(120_000),
@@ -132,6 +133,13 @@ const ConfigSchema = z.object({
   if (value.NODE_ENV === 'production') {
     if (!value.METRICS_TOKEN) {
       ctx.addIssue({ code: 'custom', path: ['METRICS_TOKEN'], message: 'METRICS_TOKEN is required in production' });
+    }
+    if (value.ZERO_COST_MODE && !value.LOCAL_AI_MODEL_DIGEST) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['LOCAL_AI_MODEL_DIGEST'],
+        message: 'LOCAL_AI_MODEL_DIGEST is required in production to prevent silent local-model drift',
+      });
     }
     if (value.DATABASE_URL.includes('change_me')) {
       ctx.addIssue({ code: 'custom', path: ['DATABASE_URL'], message: 'production DATABASE_URL cannot use the example credential' });
