@@ -125,7 +125,7 @@ services:
   migrate:
     build: .
     command: ["node", "dist/scripts/migrate.js"]
-    env_file: .env
+    env_file: ${APP_ENV_FILE:-.env}
     read_only: true
     init: true
     security_opt:
@@ -141,7 +141,7 @@ services:
 
   bootstrap:
     build: .
-    env_file: .env
+    env_file: ${APP_ENV_FILE:-.env}
     read_only: true
     init: true
     security_opt:
@@ -164,7 +164,7 @@ services:
 
   api:
     build: .
-    env_file: .env
+    env_file: ${APP_ENV_FILE:-.env}
     read_only: true
     init: true
     pids_limit: 256
@@ -194,7 +194,7 @@ services:
   worker:
     build: .
     command: ["node", "dist/src/worker.js"]
-    env_file: .env
+    env_file: ${APP_ENV_FILE:-.env}
     read_only: true
     init: true
     pids_limit: 256
