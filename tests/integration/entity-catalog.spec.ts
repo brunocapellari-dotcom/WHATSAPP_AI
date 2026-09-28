@@ -36,6 +36,38 @@ run('canonical entity catalog', () => {
     expect(resolved?.canonicalName).toBe('Rondonópolis/MT');
   });
 
+  it('uses conservative trigram matching for clear official-catalog typos', async () => {
+    const id = 'city:ibge:test-' + randomUUID();
+    createdIds.push(id);
+    await pool.query(
+      "INSERT INTO canonical_entities(entity_id,entity_type,canonical_name,aliases,external_ids,evidence,confidence) VALUES($1,'CITY','Rondonópolis/MT',$2,$3,$4,1)",
+      [
+        id,
+        ['RONDONOPOLIS MT'],
+        { ibgeMunicipalityId: '5107602', uf: 'MT' },
+        [{ source: 'IBGE_LOCALIDADES' }],
+      ],
+    );
+
+    const resolved = await resolver.resolveCity('Rondonopoliss MT');
+    expect(resolved?.id).toBe(id);
+    expect(resolved?.matchMethod).toBe('FUZZY');
+    expect(resolved?.confidence).toBeGreaterThanOrEqual(0.86);
+  });
+
+  it('never applies fuzzy matching to short abbreviations', async () => {
+    const id = 'city:ibge:test-' + randomUUID();
+    createdIds.push(id);
+    await pool.query(
+      "INSERT INTO canonical_entities(entity_id,entity_type,canonical_name,aliases,confidence) VALUES($1,'CITY','Rio do Oeste/SC',ARRAY['RIO'],1)",
+      [id],
+    );
+
+    const resolved = await resolver.resolveCity('RII');
+    expect(resolved?.id).not.toBe(id);
+    expect(resolved?.matchMethod).toBe('FALLBACK');
+  });
+
   it('does not arbitrarily choose between ambiguous municipality aliases', async () => {
     const first = 'city:ibge:test-' + randomUUID();
     const second = 'city:ibge:test-' + randomUUID();
