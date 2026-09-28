@@ -100,6 +100,24 @@ describe('configuration safety', () => {
     })).toThrow();
   });
 
+  it('requires a pinned local-model digest in production zero-cost mode', () => {
+    expect(() => loadConfig({
+      ...baseEnv,
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgres://user:strong-password@db/whatsapp_ai',
+      METRICS_TOKEN: 'metrics-token-123456',
+    })).toThrow(/LOCAL_AI_MODEL_DIGEST/);
+
+    const config = loadConfig({
+      ...baseEnv,
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgres://user:strong-password@db/whatsapp_ai',
+      METRICS_TOKEN: 'metrics-token-123456',
+      LOCAL_AI_MODEL_DIGEST: 'a'.repeat(64),
+    });
+    expect(config.LOCAL_AI_MODEL_DIGEST).toBe('a'.repeat(64));
+  });
+
   it('rejects production example secrets and example database credentials', () => {
     expect(() => loadConfig({
       ...baseEnv,
