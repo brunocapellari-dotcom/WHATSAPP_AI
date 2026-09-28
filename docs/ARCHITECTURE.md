@@ -48,7 +48,7 @@ Encrypted Quarantine
 2. **Privacy & Security** — quarantine criptografada, PII minimization, MIME/magic bytes, ZIP expansion limits, ClamAV, SSRF, policy, audit.
 3. **Freight Intelligence** — relevance, structured extraction, canonical entities, deduplication, quality, observations/events e outbox.
 4. **Business AI** — Agent Runtime único com Front Desk, Sales, Quote, CRM, Scheduling, Support e Human Handoff como papéis/workflows.
-5. **Human Operations** — claim/release/resume/close de conversa, envio manual idempotente e aprovação de ações de alto risco.
+5. **Human Operations** — autenticação local de operador, claim/release/resume/close de conversa, envio manual idempotente e aprovação de ações de alto risco com RBAC.
 6. **Operations** — PostgreSQL, pg-boss, Prometheus metrics, backup/restore rehearsal, local Release Gate e security tooling.
 
 ## Dados principais
@@ -59,6 +59,8 @@ Encrypted Quarantine
 - `freight_observations`: cada observação real.
 - `freight_events`: evento lógico consolidado.
 - `canonical_entities`: catálogo global/tenant-scoped com provenance.
+- `canonical_entity_aliases`: projeção indexada com `pg_trgm` para resolução exact/fuzzy conservadora.
+- `operator_tokens`: credenciais locais de operador armazenadas somente como hash, vinculadas a tenant/identidade/papel.
 - `business_message_runs`: idempotência e estado de entrega automática.
 - `operator_outbound_messages`: idempotência de respostas humanas.
 - `approval_requests`: workflow de aprovação financeira/irreversível.
@@ -70,9 +72,11 @@ Encrypted Quarantine
 
 Tabelas de domínio usam RLS + FORCE RLS. Operações normais usam `set_config('app.tenant_id', ..., true)` dentro de transação.
 
-O catálogo canônico permite SELECT de registros globais (`tenant_id IS NULL`) e do próprio tenant. Um tenant não pode inserir/alterar/apagar registros globais; carga global exige identidade privilegiada de dados/migração.
+O catálogo canônico permite SELECT de registros globais (`tenant_id IS NULL`) e do próprio tenant. Um tenant não pode inserir/alterar/apagar registros globais; carga global exige identidade privilegiada de dados/migração. Aliases são projetados em tabela própria com GIN/`pg_trgm`; fuzzy só é aceito com limiar alto e margem contra ambiguidade.
 
 Relacionamentos sensíveis usam chaves compostas `(tenant_id,id)` para impedir referência cruzada mesmo se houver bug na aplicação.
+
+Operadores não escolhem `tenantId`/identidade em request. O bearer token determina tenant, operador e papel. `OPERATOR` atende conversas; approvals são visíveis/decididos apenas por `SUPERVISOR`/`ADMIN`.
 
 O worker cross-tenant exige `WORKER_DATABASE_URL` privilegiada em produção.
 
@@ -122,4 +126,6 @@ Release Gate self-hosted executa:
 - CycloneDX SBOM;
 - compose validation.
 
-Veja `ZERO_COST_POLICY.md` e `TOOLING_REVIEW_2026-09-22.md`.
+Containers de aplicação usam filesystem read-only, `no-new-privileges`, capabilities removidas e somente tmpfs/volumes necessários graváveis.
+
+Veja `ZERO_COST_POLICY.md` e `TOOLING_REVIEW_2026-09-28.md`.
