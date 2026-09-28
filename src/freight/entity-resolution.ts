@@ -3,8 +3,8 @@ import type {
   EntityResolver,
   ResolvedEntity,
 } from '../domain/ports.js';
-import { sha256 } from '../security/crypto.js';
 import { tenantQuery } from '../infra/tenant-db.js';
+import { sha256 } from '../security/crypto.js';
 
 export function normalizeEntityText(value: string): string {
   return value
@@ -38,32 +38,48 @@ const productAliases: Record<string, string> = {
   FARELO: 'FARELO DE SOJA',
 };
 
+function normalizeOrganization(value: string): string {
+  return normalizeEntityText(value)
+    .replace(/\b(?:LTDA|S A|SA|EIRELI)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function fallbackEntity(
+  prefix: string,
+  canonicalName: string,
+  confidence = 0.4,
+): ResolvedEntity {
+  return {
+    id: `${prefix}:unverified:${sha256(canonicalName).slice(0, 16)}`,
+    canonicalName,
+    matchMethod: 'FALLBACK',
+    confidence,
+  };
+}
+
 export class CanonicalEntityResolver implements EntityResolver {
   async resolveCity(value: string | null): Promise<ResolvedEntity | null> {
     if (!value) return null;
     const normalized = normalizeEntityText(value);
     const known = cityAliases[normalized];
     const canonicalName = known ?? normalized;
-    return {
-      id: `city:unverified:${sha256(canonicalName).slice(0, 16)}`,
-      canonicalName,
-      matchMethod: 'FALLBACK',
-      confidence: known ? 0.85 : 0.4,
-    };
+    return fallbackEntity('city', canonicalName, known ? 0.85 : 0.4);
   }
 
   async resolveCompany(value: string | null): Promise<ResolvedEntity | null> {
     if (!value) return null;
-    const canonicalName = normalizeEntityText(value)
-      .replace(/\b(?:LTDA|S A|SA|EIRELI)\b/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    return {
-      id: `company:unverified:${sha256(canonicalName).slice(0, 16)}`,
-      canonicalName,
-      matchMethod: 'FALLBACK',
-      confidence: 0.4,
-    };
+    return fallbackEntity('company', normalizeOrganization(value));
+  }
+
+  async resolveCarrier(value: string | null): Promise<ResolvedEntity | null> {
+    if (!value) return null;
+    return fallbackEntity('carrier', normalizeOrganization(value));
+  }
+
+  async resolveFacility(value: string | null): Promise<ResolvedEntity | null> {
+    if (!value) return null;
+    return fallbackEntity('facility', normalizeEntityText(value));
   }
 
   async resolveProduct(value: string | null): Promise<ResolvedEntity | null> {
@@ -71,16 +87,18 @@ export class CanonicalEntityResolver implements EntityResolver {
     const normalized = normalizeEntityText(value);
     const known = productAliases[normalized];
     const canonicalName = known ?? normalized;
-    return {
-      id: `product:unverified:${sha256(canonicalName).slice(0, 16)}`,
-      canonicalName,
-      matchMethod: 'FALLBACK',
-      confidence: known ? 0.9 : 0.5,
-    };
+    return fallbackEntity('product', canonicalName, known ? 0.9 : 0.5);
   }
 }
 
-type CatalogEntityType = 'CITY' | 'COMPANY' | 'CARRIER' | 'PRODUCT';
+type CatalogEntityType =
+  | 'CITY'
+  | 'COMPANY'
+  | 'FARM'
+  | 'WAREHOUSE'
+  | 'TERMINAL'
+  | 'CARRIER'
+  | 'PRODUCT';
 
 type CatalogRow = {
   entity_id: string;
@@ -93,6 +111,9 @@ type CatalogRow = {
 const FUZZY_THRESHOLD: Record<CatalogEntityType, number> = {
   CITY: 0.86,
   COMPANY: 0.9,
+  FARM: 0.92,
+  WAREHOUSE: 0.92,
+  TERMINAL: 0.92,
   CARRIER: 0.9,
   PRODUCT: 0.92,
 };
@@ -163,23 +184,36 @@ export class PostgresEntityResolver implements EntityResolver {
   constructor(private readonly pool: Pool) {}
 
   async resolveCity(value: string | null, tenantId?: string) {
-    const catalog = await this.resolveFromCatalog('CITY', value, tenantId);
+    const catalog = await this.resolveFromCatalog(['CITY'], value, tenantId);
     return catalog ?? this.fallback.resolveCity(value);
   }
 
   async resolveCompany(value: string | null, tenantId?: string) {
-    const catalog = await this.resolveFromCatalog('COMPANY', value, tenantId)
-      ?? await this.resolveFromCatalog('CARRIER', value, tenantId);
+    const catalog = await this.resolveFromCatalog(['COMPANY'], value, tenantId);
     return catalog ?? this.fallback.resolveCompany(value);
   }
 
+  async resolveCarrier(value: string | null, tenantId?: string) {
+    const catalog = await this.resolveFromCatalog(['CARRIER'], value, tenantId);
+    return catalog ?? this.fallback.resolveCarrier(value);
+  }
+
+  async resolveFacility(value: string | null, tenantId?: string) {
+    const catalog = await this.resolveFromCatalog(
+      ['FARM', 'WAREHOUSE', 'TERMINAL'],
+      value,
+      tenantId,
+    );
+    return catalog ?? this.fallback.resolveFacility(value);
+  }
+
   async resolveProduct(value: string | null, tenantId?: string) {
-    const catalog = await this.resolveFromCatalog('PRODUCT', value, tenantId);
+    const catalog = await this.resolveFromCatalog(['PRODUCT'], value, tenantId);
     return catalog ?? this.fallback.resolveProduct(value);
   }
 
   private async resolveFromCatalog(
-    entityType: CatalogEntityType,
+    entityTypes: CatalogEntityType[],
     value: string | null,
     tenantId?: string,
   ): Promise<ResolvedEntity | null> {
@@ -195,12 +229,12 @@ export class PostgresEntityResolver implements EntityResolver {
          1::float8 AS score
        FROM canonical_entity_aliases a
        JOIN canonical_entities e ON e.entity_id=a.entity_id
-       WHERE a.entity_type=$1
+       WHERE a.entity_type = ANY($1::text[])
          AND (a.tenant_id IS NULL OR a.tenant_id=$2)
          AND a.alias=$3
        ORDER BY (a.tenant_id IS NOT NULL) DESC,e.confidence DESC,e.canonical_name
-       LIMIT 8`;
-    const values = [entityType, tenantId ?? null, alias];
+       LIMIT 12`;
+    const values = [entityTypes, tenantId ?? null, alias];
 
     const exactResult = tenantId
       ? await tenantQuery<CatalogRow>(this.pool, tenantId, exactSql, values)
@@ -209,8 +243,8 @@ export class PostgresEntityResolver implements EntityResolver {
     const exact = exactCandidate(exactResult.rows, tenantId);
     if (exact) return exact;
 
-    // Short aliases are intentionally exact-only. Trigram similarity is too
-    // permissive for abbreviations such as ROO, LRV or short product codes.
+    // Short aliases are exact-only. Trigram similarity is intentionally not
+    // applied to abbreviations such as ROO, LRV or compact facility codes.
     if (alias.length < 5) return null;
 
     const fuzzySql = `SELECT
@@ -221,21 +255,18 @@ export class PostgresEntityResolver implements EntityResolver {
          MAX(similarity(a.alias,$3))::float8 AS score
        FROM canonical_entity_aliases a
        JOIN canonical_entities e ON e.entity_id=a.entity_id
-       WHERE a.entity_type=$1
+       WHERE a.entity_type = ANY($1::text[])
          AND (a.tenant_id IS NULL OR a.tenant_id=$2)
          AND a.alias % $3
        GROUP BY e.entity_id,e.canonical_name,e.tenant_id,e.confidence
        ORDER BY score DESC,e.confidence DESC,e.canonical_name
-       LIMIT 8`;
+       LIMIT 12`;
 
     const fuzzyResult = tenantId
       ? await tenantQuery<CatalogRow>(this.pool, tenantId, fuzzySql, values)
       : await this.pool.query<CatalogRow>(fuzzySql, values);
 
-    return fuzzyCandidate(
-      fuzzyResult.rows,
-      tenantId,
-      FUZZY_THRESHOLD[entityType],
-    );
+    const threshold = Math.max(...entityTypes.map((type) => FUZZY_THRESHOLD[type]));
+    return fuzzyCandidate(fuzzyResult.rows, tenantId, threshold);
   }
 }
