@@ -123,7 +123,15 @@ IBGE:
 npm run data:sync:ibge
 ```
 
-Empresas/transportadoras/outros catálogos normalizados:
+ANTT/RNTRC oficial:
+
+```bash
+npm run data:sync:antt-rntrc
+```
+
+O sincronizador descobre o recurso mensal mais recente no CKAN da ANTT, pagina o datastore, importa somente organizações ativas com CNPJ de 14 posições e exclui CPF/TAC. Cleanup de registros antigos ocorre somente depois de validar que o snapshot completo foi lido.
+
+Empresas/outros catálogos normalizados:
 
 ```bash
 npm run data:import:entities -- arquivo.ndjson
