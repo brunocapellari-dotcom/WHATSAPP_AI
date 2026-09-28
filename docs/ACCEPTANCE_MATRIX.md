@@ -8,18 +8,18 @@ A release is `PASS` only when every mandatory scenario below passes on the same 
 | Ingestion | valid auth; invalid signature; replay; malformed payload; collector disabled; durable inbox outage/recovery |
 | WPP reconciliation | all-new + all-unread merge; dedupe; persist-before-seen; provider outage; reconnect; authorized group |
 | Freight | relevant/irrelevant; extraction; truth class; aliases; repost across groups; variation; quality; tenant isolation |
-| Canonical entities | IBGE city; global read; global tenant-write denial; company/carrier import; textual external ids; provenance |
+| Canonical entities | IBGE city; global read; global tenant-write denial; company/carrier import; textual external ids; exact alias; conservative pg_trgm typo; short-alias exact-only; ambiguous fuzzy rejection; match method/confidence provenance |
 | Business | normal; rushed; irritated; indecisive; confused; discount; restricted info; prompt injection; nonexistent data; complex request |
 | Tools | schema supplied to model; validation; real output synthesis; tool failure; unknown tool; no invented fields |
-| Human handoff | persist handoff; AI suspended while WAITING_HUMAN/HUMAN; claim conflict; release; resume AI; close |
+| Human handoff | persist handoff; AI suspended while WAITING_HUMAN/HUMAN; local operator token auth; forged/expired/revoked token denial; tenant isolation; role denial; claim conflict; release; resume AI; close |
 | Operator outbound | owner-only; request-id idempotency; safe retry pre-delivery; no retry uncertain; status lookup |
-| Approval | high-risk plan freezes auto tools; request idempotency; detail; approve once; reject; second approval blocked; audit |
+| Approval | high-risk plan freezes auto tools; request idempotency; supervisor/admin-only visibility and decision; approve once; reject; second approval blocked; audit |
 | Follow-up | conversation-bound schedule; due delivery; safe retry; ambiguous delivery -> human; stale SENDING recovery |
 | Multimodal | text; audio; image; PDF text; scanned PDF; XLSX; DOCX; MIME spoof; oversize; malware; ZIP bomb; parser timeout |
 | Security | prompt/tool injection; SSRF; HMAC mismatch; tenant crossing; global-catalog write; malicious attachment; shell/eval SAST |
 | Resilience | DB transient failure; provider transient failure; local AI failure; outbox failure; retries/backoff; stale locks; process restart |
 | AgroLog | observation/event topics; idempotency key; local NDJSON fsync; replay safety; no direct analytical DB write |
-| Ops | migrations empty DB; lint; typecheck; all tests; build; container; ready/metrics; backup; restore rehearsal; compose validation |
+| Ops | migrations empty DB; lint; typecheck; all tests; build; read-only/no-new-privileges containers; ready/metrics; backup; restore rehearsal; compose validation |
 | Supply chain | committed lockfile; npm audit; Semgrep; Gitleaks history; Trivy fs/config/image; CycloneDX SBOM |
 
 ## Automated repository coverage
