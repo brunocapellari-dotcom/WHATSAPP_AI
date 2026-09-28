@@ -32,8 +32,32 @@ if ! git diff --quiet -- package.json package-lock.json; then
   exit 1
 fi
 
+RELEASE_TMP="$ROOT/.tmp/release-gate"
+mkdir -p "$RELEASE_TMP"
+export POSTGRES_PASSWORD="release_gate_postgres_password"
+export WPP_API_TOKEN="release-gate-wpp-secret-0123456789"
+export APP_ENV_FILE="$RELEASE_TMP/app.env"
+
+cat > "$APP_ENV_FILE" <<EOF
+NODE_ENV=test
+ZERO_COST_MODE=true
+DATABASE_URL=postgres://whatsapp_ai:$POSTGRES_PASSWORD@postgres:5432/whatsapp_ai
+APP_ENCRYPTION_KEY=01234567890123456789012345678901
+PII_HMAC_KEY=01234567890123456789012345678901
+INTERNAL_API_KEY=test-internal-api-key-123456
+LOCAL_AI_BASE_URL=http://ollama:11434
+WHISPER_BASE_URL=http://whisper:8080
+WPP_BASE_URL=http://wppconnect:21465
+WPP_API_TOKEN=$WPP_API_TOKEN
+WPP_COLLECTOR_ID=wpp-freight-default
+AGROLOG_EXPORT_DIR=/data/agrolog-export
+CLAMAV_HOST=clamav
+EOF
+chmod 600 "$APP_ENV_FILE"
+
 cleanup() {
   docker compose stop postgres >/dev/null 2>&1 || true
+  rm -f "$APP_ENV_FILE" /tmp/whatsapp-ai-backup-path
 }
 trap cleanup EXIT
 
@@ -57,7 +81,7 @@ done
 
 export NODE_ENV=test
 export ZERO_COST_MODE=true
-export DATABASE_URL="postgres://whatsapp_ai:local_change_me@127.0.0.1:5432/whatsapp_ai"
+export DATABASE_URL="postgres://whatsapp_ai:$POSTGRES_PASSWORD@127.0.0.1:5432/whatsapp_ai"
 export APP_ENCRYPTION_KEY="01234567890123456789012345678901"
 export PII_HMAC_KEY="01234567890123456789012345678901"
 export INTERNAL_API_KEY="test-internal-api-key-123456"
