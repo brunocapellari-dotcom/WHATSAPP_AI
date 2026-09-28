@@ -13,7 +13,7 @@ The repository started empty. The current branch contains the complete productio
 | Business tools/CRM | EXISTE | Real tenant catalog/ERP data before commercial use |
 | Post-tool response synthesis | EXISTE | Local model E2E on real catalog |
 | Human handoff suspension | EXISTE | Operator API E2E/staging |
-| Operator queue/claim/release/resume/close | EXISTE | Auth hardening before remote exposure |
+| Operator queue/claim/release/resume/close | EXISTE | Local token/RBAC implemented; validate full HTTP E2E and real operator workflow |
 | Operator manual replies | EXISTE | Real provider delivery/uncertainty staging |
 | Financial/irreversible approval workflow | EXISTE | Operator approval E2E on real business data |
 | Follow-up scheduling/delivery | EXISTE | Real provider scheduled delivery soak test |
@@ -24,6 +24,7 @@ The repository started empty. The current branch contains the complete productio
 | RFB companies | IMPORT CONTRACT EXISTS | P1: source converter/snapshot from official RFB data |
 | ANTT/RNTRC carriers | IMPORT CONTRACT EXISTS | P1: source converter/snapshot from official ANTT data |
 | Canonical catalog global-write governance | EXISTE | RLS integration gate |
+| Canonical entity fuzzy resolution | EXISTE | `pg_trgm` exact/fuzzy/fallback corpus gate; expand authorized aliases and ambiguity cases |
 | AgroLog local export | EXISTE | Downstream importer/contract test with AgroLog |
 | AgroLog HTTP gateway | OPTIONAL | Internal-only in zero-cost; not release dependency |
 | Observability | EXISTE / LEAN | Metrics/logs now; tracing stack only after measured need |
@@ -32,7 +33,8 @@ The repository started empty. The current branch contains the complete productio
 | CI | SELF-HOSTED CONFIGURED | Requires owner's self-hosted runner or direct local `npm run release:gate` |
 | Reproducible dependencies | BLOCKER | Generate and commit `package-lock.json`, then use `npm ci` |
 | Operator visual console | NOT REQUIRED FOR CURRENT BACKEND GATE | Add only when UI improves real operator workflow |
-| External identity provider | FALTA FOR REMOTE MULTI-USER UI | Internal API key is sufficient only for controlled internal exposure |
+| Operator authentication/RBAC | EXISTE / LOCAL | Hashed tenant-bound tokens with OPERATOR/SUPERVISOR/ADMIN; external SSO is optional only if remote/multi-user UI later justifies it |
+| Container hardening | EXISTE | Compose validation + runtime smoke test on target host |
 | Documentation | EXISTE / UPDATED | Keep synchronized with architecture changes |
 
 ## Current P0 blocker
@@ -51,6 +53,6 @@ No release may be labeled operational from mocks or code review alone.
 6. Start the local Compose stack.
 7. Execute authorized WPPConnect real-session tests: login/reconnect, text, group, media, duplicate/replay, outage/recovery.
 8. Execute local AI/multimodal corpus: text, image, audio, PDF, XLSX, DOCX.
-9. Exercise operator handoff, manual reply, approval and follow-up flows against the real provider.
+9. Issue/revoke real local operator tokens, then exercise handoff, manual reply, supervisor approval and follow-up flows against the real provider.
 10. Verify AgroLog NDJSON import and backup restore.
 11. Merge only when the same candidate passes all mandatory rows in the Acceptance Matrix.
