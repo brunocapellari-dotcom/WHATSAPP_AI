@@ -87,9 +87,33 @@ describe('local zero-cost AI client', () => {
     })).rejects.toThrow('local_ai_failed:503');
   });
 
+  it('fails readiness when the installed model digest differs from the production pin', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
+      models: [{
+        name: 'qwen3-vl:4b-instruct',
+        model: 'qwen3-vl:4b-instruct',
+        digest: 'a'.repeat(64),
+      }],
+    }));
+    const client = new LocalAiClient({
+      baseUrl: 'http://ollama:11434',
+      model: 'qwen3-vl:4b-instruct',
+      expectedDigest: 'b'.repeat(64),
+      timeoutMs: 30_000,
+    });
+
+    const health = await client.health();
+    expect(health.ok).toBe(false);
+    expect(health.details).toMatchObject({
+      digest: 'a'.repeat(64),
+      expectedDigest: 'b'.repeat(64),
+      digestMatches: false,
+    });
+  });
+
   it('reports the configured local model as ready', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
-      models: [{ name: 'qwen3-vl:4b-instruct', model: 'qwen3-vl:4b-instruct' }],
+      models: [{ name: 'qwen3-vl:4b-instruct', model: 'qwen3-vl:4b-instruct', digest: 'a'.repeat(64) }],
     }));
     const client = new LocalAiClient({
       baseUrl: 'http://ollama:11434',
