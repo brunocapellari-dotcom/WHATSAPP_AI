@@ -114,6 +114,12 @@ CodeQL não é requisito porque o projeto privado não pode depender de GitHub A
 
 ## Terceira rodada — infraestrutura complementar
 
+### ANTT CKAN datastore — ADICIONADO COMO FONTE DIRETA
+- dataset RNTRC mensal; o snapshot Ago/2026 foi publicado em 10/09/2026;
+- descoberta CKAN + `datastore_search`, evitando download/parse integral do CSV de ~153,5 MiB;
+- sem nova biblioteca CSV;
+- catálogo global mantém apenas organizações ativas e exclui identificadores pessoais/TAC.
+
 ### pg_trgm — ADICIONADO
 - extensão oficial do PostgreSQL;
 - `similarity()` + índice GIN `gin_trgm_ops`;
