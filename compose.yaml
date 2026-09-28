@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: whatsapp_ai
       POSTGRES_USER: whatsapp_ai
-      POSTGRES_PASSWORD: local_change_me
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U whatsapp_ai -d whatsapp_ai"]
       interval: 5s
@@ -100,7 +100,7 @@ services:
     environment:
       PORT: "21465"
       HOST: http://localhost
-      SECRET_KEY: ${WPP_API_TOKEN:-replace-with-strong-wpp-secret}
+      SECRET_KEY: ${WPP_API_TOKEN:?set WPP_API_TOKEN in .env}
       WEBHOOK_URL: ""
       TOKEN_STORE_TYPE: file
       CUSTOM_USER_DATA_DIR: /usr/src/wpp-server/userDataDir/
@@ -126,6 +126,14 @@ services:
     build: .
     command: ["node", "dist/scripts/migrate.js"]
     env_file: .env
+    read_only: true
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     depends_on:
       postgres:
         condition: service_healthy
@@ -134,6 +142,14 @@ services:
   bootstrap:
     build: .
     env_file: .env
+    read_only: true
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     environment:
       BOOTSTRAP_TENANT_ID: ${BOOTSTRAP_TENANT_ID:-local}
       BOOTSTRAP_TENANT_NAME: ${BOOTSTRAP_TENANT_NAME:-Local}
@@ -149,6 +165,15 @@ services:
   api:
     build: .
     env_file: .env
+    read_only: true
+    init: true
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=256m,mode=1777
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
@@ -170,6 +195,15 @@ services:
     build: .
     command: ["node", "dist/src/worker.js"]
     env_file: .env
+    read_only: true
+    init: true
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=512m,mode=1777
     depends_on:
       postgres:
         condition: service_healthy
