@@ -7,6 +7,8 @@ import { MemoryCollectorResolver } from '../../src/infra/collectors.js';
 import { WebhookInbox } from '../../src/infra/webhook-inbox.js';
 import { Metrics } from '../../src/observability/metrics.js';
 import { MetaCloudProvider } from '../../src/providers/meta-cloud-provider.js';
+import { OperatorAuthService } from '../../src/business/operator-auth-service.js';
+import { MemoryAuditSink } from '../../src/infra/audit.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 const run = databaseUrl ? describe : describe.skip;
@@ -53,7 +55,6 @@ run('durable webhook inbox', () => {
     const reclaimed = await inbox.claimBatch(100);
     const retry = reclaimed.find((candidate) => candidate.ingressId === first.ingressId);
     expect(retry).toBeTruthy();
-    expect(retry).toBeTruthy();
     const staleLock = retry!.lockToken;
     await pool.query("UPDATE webhook_inbox SET locked_at=now()-interval '6 minutes' WHERE ingress_id=$1", [first.ingressId]);
     const reclaimedAgain = await inbox.claimBatch(100);
@@ -83,6 +84,7 @@ run('durable webhook inbox', () => {
       config,
       collectors: new MemoryCollectorResolver([{ collectorId, tenantId, provider: 'meta-cloud', account: 'acct', purpose: 'FREIGHT_INTELLIGENCE', status: 'HEALTHY' }]),
       providers: new Map([[provider.id, provider]]), webhookInbox: inbox, metrics: new Metrics(), pool,
+      operatorAuthService: new OperatorAuthService(pool, new MemoryAuditSink()),
     });
     try {
       const payload = JSON.stringify({ object: 'whatsapp_business_account', entry: [{ id: 'waba', changes: [{ value: { messages: [{ id: 'wamid.http', from: 'sender-2', type: 'text', text: { body: 'SOJA Frete R$ 180' } }] } }] }] });
