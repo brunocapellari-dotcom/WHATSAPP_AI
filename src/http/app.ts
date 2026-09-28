@@ -65,7 +65,7 @@ export async function buildHttpApp(input: {
   localAi?: LocalAiClient;
   mediaProcessor?: LocalMediaProcessor;
   operatorService?: OperatorService;
-  operatorAuthService?: OperatorAuthService;
+  operatorAuthService: OperatorAuthService;
   operatorOutboundService?: OperatorOutboundService;
   approvalService?: ApprovalService;
 }) {
@@ -245,16 +245,10 @@ export async function buildHttpApp(input: {
   const operatorRoleSchema = z.enum(['OPERATOR','SUPERVISOR','ADMIN']);
 
   const operatorRoute = {
-    preHandler: input.operatorAuthService
-      ? operatorApiAuth(input.operatorAuthService)
-      : async (_request: unknown, reply: { code(status: number): { send(body: unknown): unknown } }) =>
-          reply.code(503).send({ error: 'operator_auth_unavailable' }),
+    preHandler: operatorApiAuth(input.operatorAuthService),
   };
   const supervisorRoute = {
-    preHandler: input.operatorAuthService
-      ? operatorApiAuth(input.operatorAuthService, ['SUPERVISOR','ADMIN'])
-      : async (_request: unknown, reply: { code(status: number): { send(body: unknown): unknown } }) =>
-          reply.code(503).send({ error: 'operator_auth_unavailable' }),
+    preHandler: operatorApiAuth(input.operatorAuthService, ['SUPERVISOR','ADMIN']),
   };
   const operatorListQuerySchema = z.object({
     state: z.enum(['OPEN','WAITING_HUMAN','HUMAN','CLOSED']).optional(),
@@ -410,7 +404,7 @@ export async function buildHttpApp(input: {
     reason: z.string().min(1).max(1000).optional(),
   });
 
-  app.get('/v1/operator/approvals', operatorRoute, async (request, reply) => {
+  app.get('/v1/operator/approvals', supervisorRoute, async (request, reply) => {
     if (!input.approvalService) return reply.code(503).send({ error: 'approval_service_unavailable' });
     const identity = requireOperatorIdentity(request);
     const query = approvalListQuerySchema.safeParse(request.query);
@@ -421,7 +415,7 @@ export async function buildHttpApp(input: {
     });
   });
 
-  app.get('/v1/operator/approvals/:approvalId', operatorRoute, async (request, reply) => {
+  app.get('/v1/operator/approvals/:approvalId', supervisorRoute, async (request, reply) => {
     if (!input.approvalService) return reply.code(503).send({ error: 'approval_service_unavailable' });
     const identity = requireOperatorIdentity(request);
     const params = z.object({ approvalId: approvalIdSchema }).safeParse(request.params);
@@ -490,9 +484,6 @@ export async function buildHttpApp(input: {
     '/v1/admin/operator-tokens',
     { preHandler: internalApiAuth(input.config.INTERNAL_API_KEY) },
     async (request, reply) => {
-      if (!input.operatorAuthService) {
-        return reply.code(503).send({ error: 'operator_auth_unavailable' });
-      }
       const body = adminTokenBodySchema.safeParse(request.body);
       if (!body.success) return reply.code(400).send({ error: 'invalid_request' });
       return input.operatorAuthService.issue({
@@ -506,9 +497,6 @@ export async function buildHttpApp(input: {
     '/v1/admin/operator-tokens',
     { preHandler: internalApiAuth(input.config.INTERNAL_API_KEY) },
     async (request, reply) => {
-      if (!input.operatorAuthService) {
-        return reply.code(503).send({ error: 'operator_auth_unavailable' });
-      }
       const query = z.object({ tenantId: tenantIdSchema }).safeParse(request.query);
       if (!query.success) return reply.code(400).send({ error: 'invalid_request' });
       return input.operatorAuthService.list(query.data.tenantId);
@@ -519,9 +507,6 @@ export async function buildHttpApp(input: {
     '/v1/admin/operator-tokens/:tokenId/revoke',
     { preHandler: internalApiAuth(input.config.INTERNAL_API_KEY) },
     async (request, reply) => {
-      if (!input.operatorAuthService) {
-        return reply.code(503).send({ error: 'operator_auth_unavailable' });
-      }
       const params = z.object({ tokenId: z.string().uuid() }).safeParse(request.params);
       const body = z.object({ tenantId: tenantIdSchema }).safeParse(request.body);
       if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_request' });
