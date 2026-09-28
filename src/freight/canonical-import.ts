@@ -47,6 +47,7 @@ export function normalizeCanonicalImport(input: unknown): CanonicalEntityImport 
 export async function importGlobalCanonicalEntityBatch(
   pool: Pool,
   inputs: unknown[],
+  options: { importFormat?: string } = {},
 ): Promise<number> {
   if (inputs.length === 0) return 0;
   if (inputs.length > 1000) throw new Error('canonical_import_batch_too_large');
@@ -69,7 +70,7 @@ export async function importGlobalCanonicalEntityBatch(
       JSON.stringify([{
         ...row.source,
         collectedAt: row.source.collectedAt ?? new Date().toISOString(),
-        importFormat: 'CANONICAL_ENTITY_NDJSON_V1',
+        importFormat: options.importFormat ?? 'CANONICAL_ENTITY_NDJSON_V1',
       }]),
       row.confidence,
     );
