@@ -38,6 +38,7 @@ Custos físicos de hardware, energia, armazenamento e conectividade continuam ex
 - Payload original: quarantine criptografada e temporária.
 - Dados governados: minimização e pseudonimização.
 - RLS/FORCE RLS + FKs compostas por tenant.
+- Operadores usam tokens locais hashed, vinculados a tenant e papel; approvals exigem SUPERVISOR/ADMIN.
 - Arquivos: tamanho, magic bytes, MIME, ZIP expansion, ClamAV e parser isolado.
 - LLM local não acessa banco/shell/secrets diretamente.
 - Ferramentas são Zod/JSON-Schema + política determinística.
@@ -64,7 +65,7 @@ Adapter opcional. Credenciais de envio são rejeitadas enquanto `ZERO_COST_MODE=
 message
 → relevance
 → extraction
-→ entity resolution
+→ entity resolution (exact → pg_trgm conservador → fallback)
 → deduplication
 → quality control
 → FreightObservation/FreightEvent
@@ -87,7 +88,9 @@ O modelo recebe o JSON Schema real de cada ferramenta. Respostas após ferrament
 
 ## Operação humana
 
-API interna permite:
+API interna usa bearer tokens locais vinculados a `tenantId`, `operatorReference` e papel (`OPERATOR`, `SUPERVISOR`, `ADMIN`). O token em claro só é devolvido na emissão; o banco guarda apenas hash.
+
+Permite:
 
 - listar e abrir fila de handoff;
 - assumir conversa;
@@ -95,7 +98,7 @@ API interna permite:
 - liberar atendimento;
 - retomar IA;
 - encerrar;
-- listar/inspecionar/aprovar/rejeitar ações financeiras.
+- listar/inspecionar/aprovar/rejeitar ações financeiras; listagem/decisão de approvals exige `SUPERVISOR` ou `ADMIN`.
 
 O painel visual permanece separado e só deve ser adicionado quando trouxer ganho operacional real.
 
@@ -106,7 +109,7 @@ O painel visual permanece separado e só deve ser adicionado quando trouxer ganh
 - Transportadores: contrato NDJSON preparado para ANTT/RNTRC.
 - IDs externos são texto; CNPJ nunca é tratado como número.
 
-`canonical_entities` global é legível por tenants, mas gravável apenas pela identidade privilegiada de dados/migração.
+`canonical_entities` global é legível por tenants, mas gravável apenas pela identidade privilegiada de dados/migração. `canonical_entity_aliases` mantém índices `pg_trgm`; matches registram `EXACT`, `FUZZY` ou `FALLBACK` com confiança no próprio FreightObservation.
 
 ## Executar localmente
 
@@ -136,6 +139,6 @@ O projeto continua em branch candidata e não deve ser considerado `OPERATIONAL`
 Veja:
 - `docs/ARCHITECTURE.md`
 - `docs/ZERO_COST_POLICY.md`
-- `docs/TOOLING_REVIEW_2026-09-22.md`
+- `docs/TOOLING_REVIEW_2026-09-28.md`
 - `docs/GAP_ANALYSIS.md`
 - `docs/ACCEPTANCE_MATRIX.md`
