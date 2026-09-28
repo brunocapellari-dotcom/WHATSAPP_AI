@@ -157,6 +157,31 @@ run('PostgreSQL tenant isolation', () => {
         [[globalId, tenantAId, tenantBId]],
       ));
       expect(new Set(tenantB.rows.map((row) => row.entity_id))).toEqual(new Set([globalId, tenantBId]));
+
+      await expect(withTenant(app, 'tenant-a', (client) => client.query(
+        `INSERT INTO canonical_entities(
+           entity_id,tenant_id,entity_type,canonical_name,aliases,confidence
+         ) VALUES($1,NULL,'COMPANY','Forbidden Global',ARRAY['FORBIDDEN GLOBAL'],1)`,
+        [`company:forbidden-global:${suffix}`],
+      ))).rejects.toThrow();
+
+      const tenantOwnedId = `company:tenant-owned:${suffix}`;
+      await withTenant(app, 'tenant-a', (client) => client.query(
+        `INSERT INTO canonical_entities(
+           entity_id,tenant_id,entity_type,canonical_name,aliases,confidence
+         ) VALUES($1,'tenant-a','COMPANY','Tenant Owned',ARRAY['TENANT OWNED'],1)`,
+        [tenantOwnedId],
+      ));
+      const tenantOwnedAlias = await withTenant(app, 'tenant-a', (client) => client.query(
+        `SELECT alias FROM canonical_entity_aliases
+         WHERE entity_id=$1 AND alias='TENANT OWNED'`,
+        [tenantOwnedId],
+      ));
+      expect(tenantOwnedAlias.rowCount).toBe(1);
+      await withTenant(app, 'tenant-a', (client) => client.query(
+        'DELETE FROM canonical_entities WHERE entity_id=$1',
+        [tenantOwnedId],
+      ));
     } finally {
       await admin.query(
         `DELETE FROM canonical_entities WHERE entity_id = ANY($1::text[])`,
