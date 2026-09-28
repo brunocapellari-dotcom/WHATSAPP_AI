@@ -29,13 +29,17 @@ provider auth/reconciliation
 - exact tool schemas from Zod converted to JSON Schema for local-model planning;
 - FINANCIAL/IRREVERSIBLE calls are persisted for human approval and never executed by agent authority;
 - human handoff suspends AI until explicit `resume-ai`;
+- operator bearer tokens are random local credentials stored only as SHA-256 hashes and bound to tenant/operator/role;
+- operator requests never supply their own tenant/operator identity; authorization context comes from the bearer token;
+- approval visibility/decision requires `SUPERVISOR` or `ADMIN`;
 - manual operator messages require conversation ownership and idempotent `requestId`;
 - MIME + magic-byte validation, size limits, ZIP expansion limits and ClamAV fail closed;
 - XLSX/DOCX parser is isolated with CPU/time/memory boundary;
 - SSRF resolver blocks loopback/private/link-local targets for untrusted URLs;
 - no shell, SQL, filesystem or arbitrary network tools are exposed to the model;
 - Semgrep CE offline, Gitleaks, Trivy and npm audit run in the local Release Gate;
-- SBOM CycloneDX is generated for every release candidate.
+- SBOM CycloneDX is generated for every release candidate;
+- application containers run read-only with dropped Linux capabilities and `no-new-privileges`, with only bounded tmpfs/required volumes writable.
 
 ## Delivery ambiguity
 
@@ -65,7 +69,8 @@ This is a billing guardrail and an egress-reduction control; it does not replace
 ## Secrets
 
 Secrets remain outside Git:
-- .env is ignored;
+- `.env` is ignored and Compose requires explicit PostgreSQL/WPP secrets;
+- release tests use an isolated temporary env instead of the operator's personal `.env`;
 - WhatsApp sessions/tokens are mounted volumes/env only;
 - no QR/session material is committed;
 - backups and generated security artifacts are local and ignored where appropriate.
