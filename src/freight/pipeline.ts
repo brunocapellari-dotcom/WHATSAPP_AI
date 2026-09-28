@@ -57,6 +57,13 @@ export class FreightPipeline {
       destinationId: destination?.id ?? null,
       companyId: company?.id ?? null,
       carrierId: carrier?.id ?? null,
+      resolution: {
+        product: product ? { method: product.matchMethod, confidence: product.confidence } : null,
+        origin: origin ? { method: origin.matchMethod, confidence: origin.confidence } : null,
+        destination: destination ? { method: destination.matchMethod, confidence: destination.confidence } : null,
+        company: company ? { method: company.matchMethod, confidence: company.confidence } : null,
+        carrier: carrier ? { method: carrier.matchMethod, confidence: carrier.confidence } : null,
+      },
     };
 
     const identity = freightIdentity({
@@ -65,9 +72,22 @@ export class FreightPipeline {
       canonical,
     });
 
+    const resolutionIssues = [
+      ['origin', origin],
+      ['destination', destination],
+      ['company', company],
+      ['carrier', carrier],
+      ['product', product],
+    ].flatMap(([fieldName, resolved]) => {
+      if (!resolved || typeof resolved === 'string') return [];
+      if (resolved.matchMethod === 'EXACT') return [];
+      return [`entity:${fieldName}:${resolved.matchMethod.toLowerCase()}`];
+    });
+
+    const baseIssues = [...quality.issues, ...resolutionIssues];
     const issues = identity.eventEligible
-      ? quality.issues
-      : [...quality.issues, 'dedup:insufficient_identity'];
+      ? baseIssues
+      : [...baseIssues, 'dedup:insufficient_identity'];
 
     // raw_messages.event_id is stable across webhook retries. Reusing it as the
     // observation id makes every freight observation exactly-once per source message.
