@@ -21,8 +21,8 @@ The repository started empty. The current branch contains the complete productio
 | Spreadsheet/DOCX isolation | EXISTE | Full build/security gate |
 | Freight extraction/dedup | EXISTE | Expand golden corpus with authorized real messages |
 | IBGE municipalities | EXISTE | Execute/update sync on real candidate DB |
-| RFB companies | IMPORT CONTRACT EXISTS | P1: source converter/snapshot from official RFB data |
-| ANTT/RNTRC carriers | IMPORT CONTRACT EXISTS | P1: source converter/snapshot from official ANTT data |
+| RFB companies | SELECTIVE IMPORT CONTRACT EXISTS | Full national mirror intentionally not default because of very large footprint; ingest curated/needed official company subsets without personal QSA data |
+| ANTT/RNTRC carriers | EXISTE / OFFICIAL SYNC | CKAN datastore sync implemented; run against current snapshot and validate live volume/schema in Release Gate environment |
 | Canonical catalog global-write governance | EXISTE | RLS integration gate |
 | Canonical entity fuzzy resolution | EXISTE | `pg_trgm` exact/fuzzy/fallback corpus gate; expand authorized aliases and ambiguity cases |
 | AgroLog local export | EXISTE | Downstream importer/contract test with AgroLog |
