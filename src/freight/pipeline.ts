@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { EntityResolver, MessageRepository, StructuredLanguageModel } from '../domain/ports.js';
+import type { EntityResolver, MessageRepository, ResolvedEntity, StructuredLanguageModel } from '../domain/ports.js';
 import type { FreightEvent, FreightFields, FreightObservation, RawMessage } from '../domain/schemas.js';
 import { OutboxEventSchema } from '../domain/schemas.js';
 import { deterministicUuid } from '../security/crypto.js';
@@ -72,15 +72,15 @@ export class FreightPipeline {
       canonical,
     });
 
-    const resolutionIssues = [
+    const resolutionEntries: Array<[string, ResolvedEntity | null]> = [
       ['origin', origin],
       ['destination', destination],
       ['company', company],
       ['carrier', carrier],
       ['product', product],
-    ].flatMap(([fieldName, resolved]) => {
-      if (!resolved || typeof resolved === 'string') return [];
-      if (resolved.matchMethod === 'EXACT') return [];
+    ];
+    const resolutionIssues = resolutionEntries.flatMap(([fieldName, resolved]) => {
+      if (!resolved || resolved.matchMethod === 'EXACT') return [];
       return [`entity:${fieldName}:${resolved.matchMethod.toLowerCase()}`];
     });
 
