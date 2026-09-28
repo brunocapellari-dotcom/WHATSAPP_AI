@@ -57,11 +57,7 @@ describe('operator API auth', () => {
     await operatorApiAuth(service, ['SUPERVISOR','ADMIN'])(req, response.value);
 
     expect(response.state.status).toBe(403);
-    expect(requireOperatorIdentity(req)).toMatchObject({
-      tenantId: 'tenant-a',
-      operatorReference: 'alice',
-      role: 'OPERATOR',
-    });
+    expect(() => requireOperatorIdentity(req)).toThrow('operator_identity_missing');
   });
 
   it('injects tenant-bound supervisor identity from the token', async () => {
