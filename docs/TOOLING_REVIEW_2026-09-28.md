@@ -112,6 +112,43 @@ Funções: filesystem/config/image vulnerabilities + geração de SBOM CycloneDX
 
 CodeQL não é requisito porque o projeto privado não pode depender de GitHub Advanced Security ou runners pagos.
 
+## Terceira rodada — infraestrutura complementar
+
+### pg_trgm — ADICIONADO
+- extensão oficial do PostgreSQL;
+- `similarity()` + índice GIN `gin_trgm_ops`;
+- elimina necessidade de biblioteca fuzzy no Node;
+- usado somente após alias exato, com thresholds altos, aliases curtos exact-only e rejeição de ambiguidade;
+- método/confiança preservados no domínio.
+
+### pgBackRest 2.59.2 — RESERVA
+Muito ativo e tecnicamente superior quando houver necessidade real de PITR/WAL contínuo. Não entra agora porque `pg_dump -Fc` + checksum + restore rehearsal satisfaz o objetivo atual com menos operação. Reavaliar por RPO/RTO e volume, não por popularidade.
+
+### Authelia 4.39.28 / authentik 2026.8.3 — NÃO ADICIONAR AGORA
+Ambos são ativos. O backend interno agora possui tokens locais hashed, tenant-bound e RBAC. Um IdP adicional só entra quando houver UI remota/SSO/MFA multiusuário que justifique outro serviço.
+
+### OpenTelemetry JS 2.11.0 / Loki 3.7.8 — NÃO ADICIONAR AGORA
+Ativos e úteis, mas Prometheus + logs estruturados cobrem os sinais atuais. Adicionar tracing/log aggregation sem uma necessidade medida aumentaria serviços e retenção operacional.
+
+### OpenBao 2.7.0 — RESERVA
+Boa opção futura para secrets multi-host/rotação centralizada. Para o stack local atual, env/volumes privados + secrets fora do Git são mais simples.
+
+### Autenticação local de operador — ADICIONADA
+- bearer token aleatório;
+- plaintext devolvido somente na emissão;
+- SHA-256 persistido;
+- tenant/operator/role vinculados ao token;
+- `OPERATOR`, `SUPERVISOR`, `ADMIN`;
+- approvals restritos a supervisor/admin;
+- nenhum SaaS/IdP obrigatório.
+
+### Container hardening — ADICIONADO
+- filesystem read-only para API/worker/migrate/bootstrap;
+- `no-new-privileges`;
+- capabilities Linux removidas;
+- tmpfs/volumes graváveis minimizados;
+- senhas/tokens fracos removidos do Compose.
+
 ## Decisões desta rodada
 
 ADICIONADO/MELHORADO:
@@ -124,7 +161,10 @@ ADICIONADO/MELHORADO:
 - Operator API para handoff humano;
 - RLS que impede tenant de gravar catálogo canônico global;
 - source_type reconciliation no schema;
-- importador canônico NDJSON/offline para RFB/ANTT/outros catálogos.
+- importador canônico NDJSON/offline para RFB/ANTT/outros catálogos;
+- `pg_trgm`/alias projection para resolução fuzzy conservadora;
+- autenticação/RBAC local de operador;
+- container hardening e secrets explícitos no Compose.
 
 MANTIDO:
 - WPPConnect;
@@ -144,7 +184,11 @@ NÃO ADICIONADO:
 - llama.cpp paralelo;
 - ExcelJS;
 - parser CSV extra;
-- Phoenix/Grafana/Tempo neste estágio.
+- Phoenix/Grafana/Tempo neste estágio;
+- pgBackRest até existir requisito de PITR/RPO/RTO;
+- Authelia/authentik até existir requisito real de SSO/MFA remoto;
+- OpenTelemetry/Loki até tracing/log centralizado ser necessário;
+- OpenBao até existir operação multi-host de secrets.
 
 ## Próximo critério de troca
 
