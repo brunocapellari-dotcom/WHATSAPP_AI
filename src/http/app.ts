@@ -70,7 +70,17 @@ export async function buildHttpApp(input: {
   approvalService?: ApprovalService;
 }) {
   const app = Fastify({
-    logger: { level: input.config.NODE_ENV === 'test' ? 'silent' : 'info' },
+    logger: {
+      level: input.config.NODE_ENV === 'test' ? 'silent' : 'info',
+      redact: {
+        paths: [
+          'req.headers.authorization',
+          'req.headers["x-provider-signature"]',
+          'req.headers["x-hub-signature-256"]',
+        ],
+        censor: '[REDACTED]',
+      },
+    },
     bodyLimit: input.config.WEBHOOK_MAX_BYTES,
   });
 
@@ -486,10 +496,14 @@ export async function buildHttpApp(input: {
     async (request, reply) => {
       const body = adminTokenBodySchema.safeParse(request.body);
       if (!body.success) return reply.code(400).send({ error: 'invalid_request' });
-      return input.operatorAuthService.issue({
+      const issued = await input.operatorAuthService.issue({
         ...body.data,
         actor: 'internal-admin',
       });
+      return reply
+        .header('Cache-Control', 'no-store')
+        .header('Pragma', 'no-cache')
+        .send(issued);
     },
   );
 
