@@ -8,7 +8,7 @@ A release is `PASS` only when every mandatory scenario below passes on the same 
 | Ingestion | valid auth; invalid signature; replay; malformed payload; collector disabled; durable inbox outage/recovery |
 | WPP reconciliation | all-new + all-unread merge; dedupe; persist-before-seen; provider outage; reconnect; authorized group |
 | Freight | relevant/irrelevant; extraction; truth class; aliases; repost across groups; variation; quality; tenant isolation |
-| Canonical entities | IBGE city; global read; global tenant-write denial; company/carrier import; textual external ids; exact alias; conservative pg_trgm typo; short-alias exact-only; ambiguous fuzzy rejection; match method/confidence provenance |
+| Canonical entities | IBGE city; ANTT latest-resource discovery; RNTRC pagination; active organization import; personal/TAC exclusion; stale cleanup only after complete snapshot; global read; global tenant-write denial; company import contract; textual external ids; exact alias; conservative pg_trgm typo; short-alias exact-only; ambiguous fuzzy rejection; company/carrier/facility namespace separation; match method/confidence provenance |
 | Business | normal; rushed; irritated; indecisive; confused; discount; restricted info; prompt injection; nonexistent data; complex request |
 | Tools | schema supplied to model; validation; real output synthesis; tool failure; unknown tool; no invented fields |
 | Human handoff | persist handoff; AI suspended while WAITING_HUMAN/HUMAN; local operator token auth; forged/expired/revoked token denial; tenant isolation; role denial; claim conflict; release; resume AI; close |
