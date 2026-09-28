@@ -82,6 +82,54 @@ run('canonical entity catalog', () => {
     expect(resolved?.id.startsWith('city:unverified:')).toBe(true);
   });
 
+  it('keeps company and carrier namespaces distinct when aliases are identical', async () => {
+    const companyId = 'company:test-' + randomUUID();
+    const carrierId = 'carrier:test-' + randomUUID();
+    createdIds.push(companyId, carrierId);
+
+    await pool.query(
+      `INSERT INTO canonical_entities(
+         entity_id,entity_type,canonical_name,aliases,confidence
+       ) VALUES
+         ($1,'COMPANY','Transportadora Horizonte Trading',ARRAY['HORIZONTE'],1),
+         ($2,'CARRIER','Transportadora Horizonte',ARRAY['HORIZONTE'],1)`,
+      [companyId, carrierId],
+    );
+
+    const company = await resolver.resolveCompany('Horizonte');
+    const carrier = await resolver.resolveCarrier('Horizonte');
+
+    expect(company?.id).toBe(companyId);
+    expect(company?.matchMethod).toBe('EXACT');
+    expect(carrier?.id).toBe(carrierId);
+    expect(carrier?.matchMethod).toBe('EXACT');
+  });
+
+  it('resolves a unique facility but refuses ambiguous farm/warehouse names', async () => {
+    const warehouseId = 'warehouse:test-' + randomUUID();
+    const farmId = 'farm:test-' + randomUUID();
+    const ambiguousWarehouseId = 'warehouse:test-' + randomUUID();
+    createdIds.push(warehouseId, farmId, ambiguousWarehouseId);
+
+    await pool.query(
+      `INSERT INTO canonical_entities(
+         entity_id,entity_type,canonical_name,aliases,confidence
+       ) VALUES
+         ($1,'WAREHOUSE','Armazém Santa Luzia',ARRAY['ARMAZEM SANTA LUZIA'],1),
+         ($2,'FARM','Fazenda Boa Esperança',ARRAY['BOA ESPERANCA'],1),
+         ($3,'WAREHOUSE','Armazém Boa Esperança',ARRAY['BOA ESPERANCA'],1)`,
+      [warehouseId, farmId, ambiguousWarehouseId],
+    );
+
+    const unique = await resolver.resolveFacility('Armazem Santa Luzia');
+    expect(unique?.id).toBe(warehouseId);
+    expect(unique?.matchMethod).toBe('EXACT');
+
+    const ambiguous = await resolver.resolveFacility('Boa Esperanca');
+    expect(ambiguous?.id.startsWith('facility:unverified:')).toBe(true);
+    expect(ambiguous?.matchMethod).toBe('FALLBACK');
+  });
+
   it('prefers tenant-specific company aliases over global aliases', async () => {
     const tenantId = 'tenant-' + randomUUID();
     const globalId = 'company:test-' + randomUUID();
