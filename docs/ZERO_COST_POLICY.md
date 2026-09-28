@@ -18,6 +18,7 @@ O software não consegue eliminar custos físicos do ambiente do proprietário, 
 - ClamAV, FFmpeg e Poppler locais;
 - pg-boss sobre o mesmo PostgreSQL;
 - exportação AgroLog local em NDJSON;
+- autenticação local de operador/RBAC sem IdP obrigatório;
 - Release Gate em máquina/runner self-hosted;
 - Semgrep CE, Gitleaks e Trivy locais.
 
@@ -29,7 +30,8 @@ O software não consegue eliminar custos físicos do ambiente do proprietário, 
 - AgroLog Gateway externo;
 - API comercial paga incorporada como requisito;
 - CI hospedado como requisito de release;
-- observabilidade SaaS obrigatória.
+- observabilidade SaaS obrigatória;
+- IdP comercial obrigatório para a operação interna.
 
 A validação de configuração deve falhar antes da inicialização caso um endpoint proibido seja configurado.
 
