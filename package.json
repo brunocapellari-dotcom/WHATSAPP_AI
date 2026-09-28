@@ -22,7 +22,8 @@
     "db:backup": "bash scripts/backup.sh",
     "db:restore:rehearsal": "bash scripts/restore-rehearsal.sh",
     "data:import:entities": "tsx scripts/import-canonical-entities.ts",
-    "data:sync:antt-rntrc": "tsx scripts/sync-antt-rntrc.ts"
+    "data:sync:antt-rntrc": "tsx scripts/sync-antt-rntrc.ts",
+    "model:digest": "tsx scripts/print-model-digest.ts"
   },
   "keywords": [],
   "author": "",
