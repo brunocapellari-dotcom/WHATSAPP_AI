@@ -490,9 +490,14 @@ export async function buildHttpApp(input: {
     expiresAt: z.coerce.date().nullable().optional(),
   });
 
+  const adminCredentialRoute = {
+    preHandler: internalApiAuth(input.config.INTERNAL_API_KEY),
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+  };
+
   app.post(
     '/v1/admin/operator-tokens',
-    { preHandler: internalApiAuth(input.config.INTERNAL_API_KEY) },
+    adminCredentialRoute,
     async (request, reply) => {
       const body = adminTokenBodySchema.safeParse(request.body);
       if (!body.success) return reply.code(400).send({ error: 'invalid_request' });
@@ -509,7 +514,7 @@ export async function buildHttpApp(input: {
 
   app.get(
     '/v1/admin/operator-tokens',
-    { preHandler: internalApiAuth(input.config.INTERNAL_API_KEY) },
+    adminCredentialRoute,
     async (request, reply) => {
       const query = z.object({ tenantId: tenantIdSchema }).safeParse(request.query);
       if (!query.success) return reply.code(400).send({ error: 'invalid_request' });
@@ -519,7 +524,7 @@ export async function buildHttpApp(input: {
 
   app.post(
     '/v1/admin/operator-tokens/:tokenId/revoke',
-    { preHandler: internalApiAuth(input.config.INTERNAL_API_KEY) },
+    adminCredentialRoute,
     async (request, reply) => {
       const params = z.object({ tokenId: z.string().uuid() }).safeParse(request.params);
       const body = z.object({ tenantId: tenantIdSchema }).safeParse(request.body);
