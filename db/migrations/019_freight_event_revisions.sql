@@ -2,8 +2,13 @@ ALTER TABLE freight_events
   ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1 CHECK (revision >= 1);
 
 UPDATE freight_events
-SET payload = jsonb_set(payload, '{revision}', to_jsonb(revision), true)
-WHERE NOT (payload ? 'revision');
+SET payload = jsonb_set(
+  jsonb_set(payload, '{revision}', to_jsonb(revision), true),
+  '{scope}',
+  to_jsonb('OBSERVED_OFFER'::text),
+  true
+)
+WHERE NOT (payload ? 'revision') OR NOT (payload ? 'scope');
 
 ALTER TABLE freight_events
   ADD CONSTRAINT freight_events_tenant_event_unique UNIQUE (tenant_id, freight_event_id);
