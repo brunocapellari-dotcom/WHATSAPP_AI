@@ -38,7 +38,7 @@ export class FreightPipeline {
   async process(
     message: RawMessage,
     options: { assumeRelevant?: boolean } = {},
-  ): Promise<{ observation: FreightObservation; event?: FreightEvent } | null> {
+  ): Promise<{ observation: FreightObservation; event?: FreightEvent; duplicate?: boolean } | null> {
     if (!options.assumeRelevant && !(await this.isRelevant(message))) return null;
 
     const fields = await extractFreight(message.text ?? '', this.llm);
@@ -148,6 +148,7 @@ export class FreightPipeline {
       return { observation };
     }
 
+    let duplicate = false;
     const event = await this.repo.persistFreightResult({
       observation,
       observationOutbox,
@@ -159,6 +160,7 @@ export class FreightPipeline {
           }
 
           if (existing) {
+            duplicate = true;
             const observationIds = [...existing.observationIds, observation.observationId];
             return {
               ...existing,
@@ -202,6 +204,6 @@ export class FreightPipeline {
     });
 
     if (!event) throw new Error('freight_event_persistence_failed');
-    return { observation, event };
+    return { observation, event, duplicate };
   }
 }
