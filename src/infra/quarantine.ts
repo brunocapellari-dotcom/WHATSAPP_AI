@@ -20,7 +20,7 @@ export class MemoryQuarantineStore implements QuarantineStore {
 export class EncryptedPostgresQuarantineStore implements QuarantineStore {
   constructor(private readonly pool: Pool, private readonly encryptionSecret: string) {}
   async put(message: RawMessage, expiresAt: Date) {
-    const encrypted = encryptJson(message.sourcePayload ?? { text: message.text, messageType: message.messageType }, this.encryptionSecret);
+    const encrypted = encryptJson(message.sourcePayload ?? { text: message.text, messageType: message.messageType }, this.encryptionSecret, 'quarantine-message');
     await tenantQuery(
       this.pool, message.tenantId,
       `INSERT INTO quarantine_messages(quarantine_id, tenant_id, provider, provider_message_id, encrypted_payload, content_hash, expires_at)
