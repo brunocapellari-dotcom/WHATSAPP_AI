@@ -16,6 +16,8 @@ export class Metrics {
   readonly duplicateRate = new Counter({ name: 'whatsapp_ai_duplicates_total', help: 'Duplicate messages/offers', labelNames: ['kind'], registers: [this.registry] });
   readonly queueLag = new Gauge({ name: 'whatsapp_ai_queue_lag', help: 'Queue lag', labelNames: ['queue'], registers: [this.registry] });
   readonly collectorHealth = new Gauge({ name: 'whatsapp_ai_collector_health', help: 'Collector health 1/0', labelNames: ['collector','provider'], registers: [this.registry] });
+  readonly handoffs = new Counter({ name: 'whatsapp_ai_handoffs_total', help: 'Human handoffs requested', labelNames: ['source'], registers: [this.registry] });
+  readonly freightQuality = new Histogram({ name: 'whatsapp_ai_freight_quality_score', help: 'Freight extraction quality score', buckets: [0.25,0.5,0.75,0.9,1], registers: [this.registry] });
 
   constructor() {
     collectDefaultMetrics({ register: this.registry, prefix: 'whatsapp_ai_' });
