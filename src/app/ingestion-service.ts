@@ -64,6 +64,8 @@ export class IngestionService {
       freightEventId?: string;
       replyMessageId?: string;
       handoff?: boolean;
+      freightQualityScore?: number;
+      freightDuplicate?: boolean;
     }> = [];
 
     for (const originalMessage of normalized) {
@@ -122,11 +124,13 @@ export class IngestionService {
       const disposition = isReplay ? 'DUPLICATE' : 'PROMOTED';
 
       if (collector.purpose === 'FREIGHT_INTELLIGENCE') {
-        const processed = await this.freight.process(message);
+        const processed = await this.freight.process(message, { assumeRelevant: true });
         results.push({
           message,
           disposition,
           ...(processed?.event ? { freightEventId: processed.event.freightEventId } : {}),
+          ...(processed ? { freightQualityScore: processed.observation.qualityScore } : {}),
+          ...(processed?.event ? { freightDuplicate: processed.event.duplicateCount > 0 } : {}),
         });
       } else if (this.business) {
         const handled = await this.business.handle(message, provider);
