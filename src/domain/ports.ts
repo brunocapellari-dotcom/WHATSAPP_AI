@@ -2,7 +2,24 @@ import type { FreightEvent, FreightFields, FreightObservation, OutboxEvent, Prov
 export type ReconciliationPayload={payload:unknown;chatAddress:string|null;isGroup:boolean};
 export interface WhatsAppProvider { readonly id:string; readonly accountId?:string; readonly capabilities:ProviderCapabilities; sendText(input:{tenantId:string;to:string;text:string}):Promise<{messageId:string}>; normalizeInbound(input:unknown,context:{tenantId:string;collectorId:string}):Promise<RawMessage[]>; health():Promise<{ok:boolean;details?:Record<string,unknown>}>; downloadMedia?(reference:string,options?:{maxBytes:number}):Promise<DownloadedMedia>; fetchReconciliationBatch?():Promise<ReconciliationPayload[]>; markChatSeen?(chatAddress:string,isGroup:boolean):Promise<void>; }
 export interface StructuredLanguageModel { extractFreight(text:string):Promise<Partial<FreightFields>>; classifyRelevance(text:string):Promise<{relevant:boolean;confidence:number;reason:string}>; }
-export interface MessageRepository { saveRaw(message:RawMessage):Promise<{status:'inserted'|'duplicate';eventId:string}>; saveObservation(observation:FreightObservation):Promise<void>; findFreightEventByFingerprint(tenantId:string,fingerprint:string):Promise<FreightEvent|null>; saveFreightEvent(event:FreightEvent):Promise<void>; mergeFreightEvent(tenantId:string,fingerprint:string,merge:(existing:FreightEvent|null)=>FreightEvent):Promise<FreightEvent>; enqueueOutbox(event:OutboxEvent):Promise<void>; }
+export type PersistFreightResultInput={
+  observation:FreightObservation;
+  observationOutbox:OutboxEvent;
+  event?:{
+    fingerprint:string;
+    merge:(existing:FreightEvent|null)=>FreightEvent;
+    outbox:(event:FreightEvent)=>OutboxEvent;
+  };
+};
+export interface MessageRepository {
+  saveRaw(message:RawMessage):Promise<{status:'inserted'|'duplicate';eventId:string}>;
+  saveObservation(observation:FreightObservation):Promise<void>;
+  findFreightEventByFingerprint(tenantId:string,fingerprint:string):Promise<FreightEvent|null>;
+  saveFreightEvent(event:FreightEvent):Promise<void>;
+  mergeFreightEvent(tenantId:string,fingerprint:string,merge:(existing:FreightEvent|null)=>FreightEvent):Promise<FreightEvent>;
+  enqueueOutbox(event:OutboxEvent):Promise<void>;
+  persistFreightResult(input:PersistFreightResultInput):Promise<FreightEvent|null>;
+}
 export type EntityMatchMethod='EXACT'|'FUZZY'|'FALLBACK';
 export type ResolvedEntity={id:string;canonicalName:string;matchMethod:EntityMatchMethod;confidence:number};
 export interface EntityResolver { resolveCity(value:string|null,tenantId?:string):Promise<ResolvedEntity|null>; resolveCompany(value:string|null,tenantId?:string):Promise<ResolvedEntity|null>; resolveCarrier(value:string|null,tenantId?:string):Promise<ResolvedEntity|null>; resolveFacility(value:string|null,tenantId?:string):Promise<ResolvedEntity|null>; resolveProduct(value:string|null,tenantId?:string):Promise<ResolvedEntity|null>; }
