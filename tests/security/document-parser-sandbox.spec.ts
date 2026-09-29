@@ -10,7 +10,7 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 describe('document parser sandbox', () => {
   it('terminates a parser that exceeds its time budget', async () => {
     await expect(runIsolatedWorker(
-      `setInterval(() => {}, 1000)`,
+      new URL('../fixtures/hanging-worker.mjs', import.meta.url),
       null,
       {
         timeoutMs: 30,
