@@ -112,6 +112,16 @@ async function drainInbox() {
           if (row.handoff) {
             processingRuntime.metrics.handoffs.inc({ source: 'business' });
           }
+          console.info('processing_trace', {
+            traceId: item.ingressId,
+            provider: item.provider,
+            collectorId: item.collectorId,
+            eventId: row.message.eventId,
+            disposition: row.disposition,
+            ...(row.freightEventId ? { freightEventId: row.freightEventId } : {}),
+            ...(row.conversationId ? { conversationId: row.conversationId } : {}),
+            ...(row.handoff !== undefined ? { handoff: row.handoff } : {}),
+          });
         }
         processingRuntime.metrics.collectorHealth.set({
           collector: item.collectorId,
