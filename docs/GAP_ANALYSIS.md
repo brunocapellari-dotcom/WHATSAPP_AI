@@ -19,7 +19,7 @@ The repository started empty. The current branch contains the complete productio
 | Follow-up scheduling/delivery | EXISTE | Real provider scheduled delivery soak test |
 | Multimodal | EXISTE / LOCAL | Real Qwen3-VL/whisper/Poppler/ClamAV staging |
 | Spreadsheet/DOCX isolation | EXISTE | Full build/security gate |
-| Freight extraction/dedup | EXISTE | Expand golden corpus with authorized real messages |
+| Freight extraction/dedup | EXISTE | Atomic observation/event/outbox persistence, explicit OBSERVED_OFFER scope and revision history implemented; expand golden corpus with authorized real messages |
 | IBGE municipalities | EXISTE | Execute/update sync on real candidate DB |
 | RFB companies | SELECTIVE IMPORT CONTRACT EXISTS | Full national mirror intentionally not default because of very large footprint; ingest curated/needed official company subsets without personal QSA data |
 | ANTT/RNTRC carriers | EXISTE / OFFICIAL SYNC | CKAN datastore sync implemented; run against current snapshot and validate live volume/schema in Release Gate environment |
@@ -27,11 +27,11 @@ The repository started empty. The current branch contains the complete productio
 | Canonical entity fuzzy resolution | EXISTE | `pg_trgm` exact/fuzzy/fallback corpus gate; expand authorized aliases and ambiguity cases |
 | AgroLog local export | EXISTE | Downstream importer/contract test with AgroLog |
 | AgroLog HTTP gateway | OPTIONAL | Internal-only in zero-cost; not release dependency |
-| Observability | EXISTE / LEAN | Metrics/logs now; tracing stack only after measured need |
+| Observability | EXISTE / LEAN | Metrics plus structured ingress→event→freight/conversation correlation and tool audit lineage; external tracing stack only after measured need |
 | Backup/restore | IMPLEMENTED | Release Gate restore rehearsal must pass |
 | SAST/secrets/vuln/SBOM | CONFIGURED | Semgrep/Gitleaks/Trivy/npm audit must pass together |
-| CI | SELF-HOSTED CONFIGURED | Requires owner's self-hosted runner or direct local `npm run release:gate` |
-| Reproducible dependencies | BLOCKER | Generate and commit `package-lock.json`, then use `npm ci` |
+| CI | CLOUD BUILD + SELF-HOSTED CONFIGURED | Cloud Build bootstrap/full gate is defined and persists evidence; GitHub self-hosted Release Gate remains queued until a runner is available |
+| Reproducible dependencies | BLOCKER | Cloud Build can generate/test a candidate lockfile and persist it as evidence, but release remains blocked until that exact `package-lock.json` is committed and rerun |
 | Operator visual console | NOT REQUIRED FOR CURRENT BACKEND GATE | Add only when UI improves real operator workflow |
 | Operator authentication/RBAC | EXISTE / LOCAL | Hashed tenant-bound tokens with OPERATOR/SUPERVISOR/ADMIN; external SSO is optional only if remote/multi-user UI later justifies it |
 | Container hardening | EXISTE | Compose validation + runtime smoke test on target host |
@@ -39,15 +39,15 @@ The repository started empty. The current branch contains the complete productio
 
 ## Current P0 blocker
 
-**The only known release-mechanics blocker that prevents objective whole-project validation here is the missing committed `package-lock.json` plus the absence of an available self-hosted runner/local Docker environment in this session.**
+**The current release-mechanics blockers are: no committed `package-lock.json`; no completed Cloud Build execution/check visible for the current commit; and no available GitHub self-hosted runner (the Release Gate remains queued). Live WPPConnect/local-AI/ClamAV/AgroLog staging evidence is also still required before `OPERATIONAL`.**
 
 No release may be labeled operational from mocks or code review alone.
 
 ## Next execution sequence
 
-1. On a network-enabled owned machine: `npm run lock:prepare`.
-2. Review and commit `package-lock.json`.
-3. Run `npm run release:gate`.
+1. Execute `cloudbuild.yaml` on the current candidate; if the lockfile is absent, the bootstrap gate generates it, tests with it and stores it under the build evidence bucket before intentionally blocking release.
+2. Review and commit that exact generated `package-lock.json`.
+3. Rerun the Cloud Build gate and/or `npm run release:gate` on the same candidate.
 4. Fix every finding.
 5. Restart the entire gate from zero after every code/dependency/migration change.
 6. Start the local Compose stack.
