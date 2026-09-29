@@ -25,7 +25,9 @@ describe('Freight Intelligence end to end', () => {
     const second = await service.ingest('mock', 'freight-1', { messageId: 'm2', chatId: 'g2', groupId: 'g2', text, timestamp: '2026-09-15T12:01:00-04:00' });
 
     expect(first[0]?.disposition).toBe('PROMOTED');
+    expect(first[0]?.freightDuplicate).toBe(false);
     expect(second[0]?.disposition).toBe('PROMOTED');
+    expect(second[0]?.freightDuplicate).toBe(true);
     expect(repo.raw.size).toBe(2);
     expect(repo.observations.size).toBe(2);
     expect(repo.freightEvents.size).toBe(1);
