@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "test": "vitest run",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-runtime-assets.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:e2e": "vitest run tests/e2e",
     "test:security": "vitest run tests/security",
