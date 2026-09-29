@@ -66,7 +66,7 @@ run('operator outbound delivery', () => {
         tenantId,
         providerId,
         'hmac:' + randomUUID(),
-        encryptJson({ routingAddress: '5511999999999' }, encryptionSecret),
+        encryptJson({ routingAddress: '5511999999999' }, encryptionSecret, 'conversation-routing'),
       ],
     );
     return { tenantId, conversationId };
