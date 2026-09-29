@@ -100,6 +100,18 @@ async function drainInbox() {
             provider: item.provider,
             disposition: row.disposition,
           });
+          if (row.disposition === 'DUPLICATE') {
+            processingRuntime.metrics.duplicateRate.inc({ kind: 'message' });
+          }
+          if (row.freightDuplicate) {
+            processingRuntime.metrics.duplicateRate.inc({ kind: 'freight_event' });
+          }
+          if (row.freightQualityScore !== undefined) {
+            processingRuntime.metrics.freightQuality.observe(row.freightQualityScore);
+          }
+          if (row.handoff) {
+            processingRuntime.metrics.handoffs.inc({ source: 'business' });
+          }
         }
         processingRuntime.metrics.collectorHealth.set({
           collector: item.collectorId,
