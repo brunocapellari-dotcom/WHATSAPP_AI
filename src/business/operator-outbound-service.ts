@@ -66,7 +66,7 @@ export class OperatorOutboundService {
     }
 
     const outboundId = randomUUID();
-    const encrypted = encryptJson({ text: normalizedText }, this.encryptionSecret);
+    const encrypted = encryptJson({ text: normalizedText }, this.encryptionSecret, 'operator-outbound-text');
 
     await tenantQuery(
       this.pool,
