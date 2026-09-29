@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ContentProcessor, DownloadedMedia } from '../domain/ports.js';
 import type { MessageType } from '../domain/schemas.js';
-import { parseOfficeDocumentIsolated } from '../security/document-parser-sandbox.js';
+import { DocumentParserClient } from '../security/document-parser-client.js';
 import type { LocalAiClient } from './local-ai-client.js';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -44,6 +44,7 @@ export class LocalMediaProcessor implements ContentProcessor {
     whisperBaseUrl: string;
     whisperTimeoutMs: number;
     pdfMaxPages: number;
+    documentParser: DocumentParserClient;
   }) {}
 
   async extract(input: DownloadedMedia & { messageType: MessageType }): Promise<string> {
@@ -58,7 +59,7 @@ export class LocalMediaProcessor implements ContentProcessor {
     }
 
     if (input.mimeType === XLSX_MIME || input.mimeType === DOCX_MIME) {
-      return parseOfficeDocumentIsolated({
+      return this.options.documentParser.parse({
         bytes: input.bytes,
         mimeType: input.mimeType,
       });
@@ -81,6 +82,7 @@ export class LocalMediaProcessor implements ContentProcessor {
       this.binaryHealth('ffmpeg'),
       this.binaryHealth('pdftotext'),
       this.binaryHealth('pdftoppm'),
+      this.options.documentParser.health(),
     ]);
     return {
       ok: checks.every((x) => x.ok),
@@ -89,6 +91,7 @@ export class LocalMediaProcessor implements ContentProcessor {
         ffmpeg: checks[1],
         pdftotext: checks[2],
         pdftoppm: checks[3],
+        documentParser: checks[4],
       },
     };
   }
