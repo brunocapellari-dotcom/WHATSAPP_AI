@@ -64,6 +64,7 @@ export class IngestionService {
       freightEventId?: string;
       replyMessageId?: string;
       handoff?: boolean;
+      conversationId?: string;
       freightQualityScore?: number;
       freightDuplicate?: boolean;
     }> = [];
@@ -138,6 +139,7 @@ export class IngestionService {
           message,
           disposition,
           ...(handled.replyMessageId ? { replyMessageId: handled.replyMessageId } : {}),
+          ...(handled.conversationId ? { conversationId: handled.conversationId } : {}),
           handoff: handled.handoff,
         });
       } else {
