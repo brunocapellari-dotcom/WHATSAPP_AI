@@ -2,63 +2,14 @@ import { Worker, type ResourceLimits } from 'node:worker_threads';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-
-const DOCUMENT_PARSER_WORKER = String.raw`
-const { parentPort, workerData } = require('node:worker_threads');
-
-(async () => {
-  try {
-    const bytes = Buffer.from(workerData.bytes);
-    const mimeType = workerData.mimeType;
-    let text = '';
-
-    if (mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
-      const imported = await import('xlsx');
-      const XLSX = imported.default ?? imported;
-      const workbook = XLSX.read(bytes, {
-        type: 'buffer',
-        cellDates: true,
-        cellFormula: false,
-        cellHTML: false,
-        dense: true,
-      });
-      const rows = [];
-      let totalLength = 0;
-      for (const sheetName of workbook.SheetNames.slice(0, 20)) {
-        const sheet = workbook.Sheets[sheetName];
-        if (!sheet) continue;
-        const header = '# ' + sheetName;
-        const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false }).slice(0, 100000);
-        rows.push(header, csv);
-        totalLength += header.length + csv.length + 2;
-        if (totalLength >= 200000) break;
-      }
-      text = rows.join('\n').slice(0, 200000);
-    } else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-      const imported = await import('mammoth');
-      const mammoth = imported.default ?? imported;
-      const result = await mammoth.extractRawText({ buffer: bytes });
-      text = String(result.value ?? '').slice(0, 200000);
-    } else {
-      throw new Error('unsupported_sandbox_document_type');
-    }
-
-    parentPort.postMessage({ ok: true, text });
-  } catch (error) {
-    parentPort.postMessage({
-      ok: false,
-      error: error instanceof Error ? error.message : 'document_parser_failed',
-    });
-  }
-})();
-`;
+const DOCUMENT_PARSER_WORKER_URL = new URL('./document-parser-worker.mjs', import.meta.url);
 
 type WorkerResult =
   | { ok: true; text: string }
   | { ok: false; error: string };
 
 export async function runIsolatedWorker<T>(
-  script: string,
+  workerUrl: URL,
   workerData: unknown,
   options: {
     timeoutMs: number;
@@ -67,8 +18,7 @@ export async function runIsolatedWorker<T>(
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false;
-    const worker = new Worker(script, {
-      eval: true,
+    const worker = new Worker(workerUrl, {
       workerData,
       resourceLimits: options.resourceLimits,
     });
@@ -112,7 +62,7 @@ export async function parseOfficeDocumentIsolated(input: {
   }
 
   const result = await runIsolatedWorker<WorkerResult>(
-    DOCUMENT_PARSER_WORKER,
+    DOCUMENT_PARSER_WORKER_URL,
     {
       bytes: Buffer.from(input.bytes),
       mimeType: input.mimeType,
