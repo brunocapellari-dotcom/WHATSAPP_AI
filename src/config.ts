@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { z } from 'zod';
 
 const EnvBooleanSchema = z.preprocess((raw) => {
@@ -27,20 +28,55 @@ function addMissingPairIssue(
   });
 }
 
+function isPrivateIpv4(host: string): boolean {
+  const octets = host.split('.').map(Number);
+  if (octets.length !== 4 || !octets.every((x) => Number.isInteger(x) && x >= 0 && x <= 255)) {
+    return false;
+  }
+  if (octets[0] === 10 || octets[0] === 127) return true;
+  if (octets[0] === 169 && octets[1] === 254) return true;
+  if (octets[0] === 192 && octets[1] === 168) return true;
+  if (octets[0] === 172 && (octets[1] ?? 0) >= 16 && (octets[1] ?? 0) <= 31) return true;
+  return false;
+}
+
+function isPrivateIpv6(host: string): boolean {
+  const normalized = host.toLowerCase();
+  return normalized === '::1'
+    || normalized.startsWith('fc')
+    || normalized.startsWith('fd')
+    || normalized.startsWith('fe8')
+    || normalized.startsWith('fe9')
+    || normalized.startsWith('fea')
+    || normalized.startsWith('feb');
+}
+
+const INTERNAL_SERVICE_HOSTS = new Set([
+  'ollama',
+  'whisper',
+  'document-parser',
+  'wppconnect',
+  'clamav',
+  'postgres',
+]);
+
 function isInternalEndpoint(raw: string): boolean {
   let url: URL;
   try { url = new URL(raw); } catch { return false; }
   if (!['http:', 'https:'].includes(url.protocol)) return false;
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (host === 'localhost' || host === '::1' || host === 'host.docker.internal') return true;
-  if (!host.includes('.')) return true; // Docker/Compose service DNS.
-  if (host.endsWith('.local') || host.endsWith('.internal')) return true;
-  const octets = host.split('.').map(Number);
-  if (octets.length === 4 && octets.every((x) => Number.isInteger(x) && x >= 0 && x <= 255)) {
-    if (octets[0] === 10 || octets[0] === 127) return true;
-    if (octets[0] === 192 && octets[1] === 168) return true;
-    if (octets[0] === 172 && (octets[1] ?? 0) >= 16 && (octets[1] ?? 0) <= 31) return true;
-  }
+  if (
+    host === 'localhost'
+    || host === 'host.docker.internal'
+    || host.endsWith('.localhost')
+    || host.endsWith('.local')
+    || host.endsWith('.internal')
+    || INTERNAL_SERVICE_HOSTS.has(host)
+  ) return true;
+
+  const family = isIP(host);
+  if (family === 4) return isPrivateIpv4(host);
+  if (family === 6) return isPrivateIpv6(host);
   return false;
 }
 
@@ -121,6 +157,7 @@ const ConfigSchema = z.object({
       ['LOCAL_AI_BASE_URL', value.LOCAL_AI_BASE_URL],
       ['WHISPER_BASE_URL', value.WHISPER_BASE_URL],
       ['DOCUMENT_PARSER_BASE_URL', value.DOCUMENT_PARSER_BASE_URL],
+      ...(value.WPP_BASE_URL ? [['WPP_BASE_URL', value.WPP_BASE_URL] as const] : []),
       ...(value.AGROLOG_GATEWAY_URL ? [['AGROLOG_GATEWAY_URL', value.AGROLOG_GATEWAY_URL] as const] : []),
     ] as const) {
       if (!isInternalEndpoint(endpoint)) {
@@ -134,6 +171,30 @@ const ConfigSchema = z.object({
   }
 
   if (value.NODE_ENV === 'production') {
+    const localSecrets = [
+      ['APP_ENCRYPTION_KEY', value.APP_ENCRYPTION_KEY],
+      ['PII_HMAC_KEY', value.PII_HMAC_KEY],
+      ['INTERNAL_API_KEY', value.INTERNAL_API_KEY],
+      ['METRICS_TOKEN', value.METRICS_TOKEN],
+      ['WPP_WEBHOOK_SECRET', value.WPP_WEBHOOK_SECRET],
+    ] as const;
+    const seenSecrets = new Map<string, string>();
+    for (const [field, secret] of localSecrets) {
+      if (!secret) continue;
+      if (secret.length < 32) {
+        ctx.addIssue({ code: 'custom', path: [field], message: `${field} must be at least 32 characters in production` });
+      }
+      const previous = seenSecrets.get(secret);
+      if (previous) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `${field} must not reuse the same secret as ${previous}`,
+        });
+      } else {
+        seenSecrets.set(secret, field);
+      }
+    }
     if (!value.METRICS_TOKEN) {
       ctx.addIssue({ code: 'custom', path: ['METRICS_TOKEN'], message: 'METRICS_TOKEN is required in production' });
     }
