@@ -128,10 +128,8 @@ export class FreightPipeline {
       schemaVersion: 1,
     };
 
-    await this.repo.saveObservation(observation);
-
     const now = new Date();
-    await this.repo.enqueueOutbox(OutboxEventSchema.parse({
+    const observationOutbox = OutboxEventSchema.parse({
       outboxId: randomUUID(),
       tenantId: message.tenantId,
       topic: 'agrolog.freight_observation.v1',
@@ -139,60 +137,69 @@ export class FreightPipeline {
       idempotencyKey: `freight-observation:${observation.observationId}`,
       payload: structuredClone(observation) as unknown as Record<string, unknown>,
       createdAt: now,
-    }));
+    });
 
     if (!identity.eventEligible) {
+      await this.repo.persistFreightResult({
+        observation,
+        observationOutbox,
+      });
       return { observation };
     }
 
-    const event = await this.repo.mergeFreightEvent(
-      message.tenantId,
-      identity.fingerprint,
-      (existing) => {
-        if (existing?.observationIds.includes(observation.observationId)) {
-          return existing;
-        }
+    const event = await this.repo.persistFreightResult({
+      observation,
+      observationOutbox,
+      event: {
+        fingerprint: identity.fingerprint,
+        merge: (existing) => {
+          if (existing?.observationIds.includes(observation.observationId)) {
+            return existing;
+          }
 
-        if (existing) {
-          const observationIds = [...existing.observationIds, observation.observationId];
+          if (existing) {
+            const observationIds = [...existing.observationIds, observation.observationId];
+            return {
+              ...existing,
+              lastSeenAt: message.occurredAt > existing.lastSeenAt
+                ? message.occurredAt
+                : existing.lastSeenAt,
+              observationIds,
+              duplicateCount: Math.max(0, observationIds.length - 1),
+              revision: existing.revision + 1,
+              mergedFields: mergeFields(existing.mergedFields, fields),
+            };
+          }
+
           return {
-            ...existing,
-            lastSeenAt: message.occurredAt > existing.lastSeenAt
-              ? message.occurredAt
-              : existing.lastSeenAt,
-            observationIds,
-            duplicateCount: Math.max(0, observationIds.length - 1),
-            mergedFields: mergeFields(existing.mergedFields, fields),
+            freightEventId: deterministicUuid(
+              `freight-event:${message.tenantId}:${identity.fingerprint}`,
+            ),
+            tenantId: message.tenantId,
+            fingerprint: identity.fingerprint,
+            firstSeenAt: message.occurredAt,
+            lastSeenAt: message.occurredAt,
+            observationIds: [observation.observationId],
+            mergedFields: fields,
+            duplicateCount: 0,
+            revision: 1,
+            status: 'ACTIVE',
+            schemaVersion: 1,
           };
-        }
-
-        return {
-          freightEventId: deterministicUuid(
-            `freight-event:${message.tenantId}:${identity.fingerprint}`,
-          ),
+        },
+        outbox: (nextEvent) => OutboxEventSchema.parse({
+          outboxId: randomUUID(),
           tenantId: message.tenantId,
-          fingerprint: identity.fingerprint,
-          firstSeenAt: message.occurredAt,
-          lastSeenAt: message.occurredAt,
-          observationIds: [observation.observationId],
-          mergedFields: fields,
-          duplicateCount: 0,
-          status: 'ACTIVE',
-          schemaVersion: 1,
-        };
+          topic: 'agrolog.freight_event.v1',
+          aggregateId: nextEvent.freightEventId,
+          idempotencyKey: `freight-event:${nextEvent.freightEventId}:revision:${nextEvent.revision}`,
+          payload: structuredClone(nextEvent) as unknown as Record<string, unknown>,
+          createdAt: now,
+        }),
       },
-    );
+    });
 
-    await this.repo.enqueueOutbox(OutboxEventSchema.parse({
-      outboxId: randomUUID(),
-      tenantId: message.tenantId,
-      topic: 'agrolog.freight_event.v1',
-      aggregateId: event.freightEventId,
-      idempotencyKey: `freight-event:${event.freightEventId}:${event.observationIds.length}`,
-      payload: structuredClone(event) as unknown as Record<string, unknown>,
-      createdAt: now,
-    }));
-
+    if (!event) throw new Error('freight_event_persistence_failed');
     return { observation, event };
   }
 }
