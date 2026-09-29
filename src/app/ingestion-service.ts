@@ -131,7 +131,7 @@ export class IngestionService {
           disposition,
           ...(processed?.event ? { freightEventId: processed.event.freightEventId } : {}),
           ...(processed ? { freightQualityScore: processed.observation.qualityScore } : {}),
-          ...(processed?.event ? { freightDuplicate: processed.event.duplicateCount > 0 } : {}),
+          ...(processed ? { freightDuplicate: processed.duplicate === true } : {}),
         });
       } else if (this.business) {
         const handled = await this.business.handle(message, provider);
