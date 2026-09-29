@@ -7,6 +7,7 @@ import {
   type OutboxEvent,
   type RawMessage,
 } from '../domain/schemas.js';
+import { minimizedSourceProvenance } from '../security/provenance.js';
 import { tenantQuery, withTenant } from './tenant-db.js';
 
 async function insertObservation(client: PoolClient, observation: FreightObservation): Promise<void> {
@@ -119,7 +120,7 @@ export class PostgresMessageRepository implements MessageRepository {
           message.attachmentReference,
           message.replyContext,
           message.contentHash,
-          null,
+          minimizedSourceProvenance(message),
           message.schemaVersion,
         ],
       );
