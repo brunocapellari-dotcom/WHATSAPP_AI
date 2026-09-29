@@ -32,7 +32,7 @@ Só reavaliar como adapter externo se surgir capability indispensável.
 
 ## Jobs PostgreSQL
 
-### pg-boss — MANTER E FIXAR 12.33.4
+### pg-boss — MANTER E FIXAR 12.33.6
 - desenvolvimento ativo em setembro de 2026;
 - Node >=22.12;
 - PostgreSQL-only e MIT;
@@ -92,7 +92,7 @@ Atualizados e fixados:
 - fastify-raw-body 6.0.1;
 - Zod 4.6.5;
 - pg 8.23.0;
-- pg-boss 12.33.4;
+- pg-boss 12.33.6;
 - Biome 2.5.14;
 - tsx 4.23.15;
 - TypeScript 5.9.3.
@@ -199,3 +199,11 @@ NÃO ADICIONADO:
 ## Próximo critério de troca
 
 Nenhum componente acima deve ser trocado por popularidade. Exigir benchmark ou falha objetiva em pelo menos uma destas dimensões: disponibilidade, precisão, segurança, manutenção, licença, consumo local, recoverability ou simplificação arquitetural.
+
+
+## Delta de execução — 2026-09-29
+
+- pg-boss atualizado para 12.33.6 após revisão de manutenção; não houve troca de engine de filas.
+- SheetJS 0.20.3 permanece no endpoint upstream já escolhido, mas o Release Gate agora exige URL exata e integridade SHA-512 no lockfile; qualquer outro HTTP dependency direto bloqueia release.
+- Não foi adicionado OpenTelemetry: correlação estruturada de baixo custo foi implementada com ingress/event/conversation/freight IDs e audit lineage de tools.
+- Cloud Build passa a executar o máximo do gate mesmo quando precisa gerar um lockfile candidato, persiste evidência e só então bloqueia a decisão de release até o lock exato ser commitado.
