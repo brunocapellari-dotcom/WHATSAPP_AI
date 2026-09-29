@@ -45,7 +45,7 @@
     "file-type": "22.1.1",
     "mammoth": "1.12.3",
     "pg": "8.23.0",
-    "pg-boss": "12.33.6",
+    "pg-boss": "12.35.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "4.6.5",
     "yauzl": "3.4.0"
