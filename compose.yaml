@@ -122,6 +122,34 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  document-parser:
+    build: .
+    command: ["node", "dist/src/document-parser-main.js"]
+    read_only: true
+    init: true
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    environment:
+      DOCUMENT_PARSER_PORT: "8090"
+      DOCUMENT_PARSER_MAX_BYTES: "26214400"
+      DOCUMENT_PARSER_TIMEOUT_MS: "15000"
+    networks:
+      - document_parser
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
   migrate:
     build: .
     command: ["node", "dist/scripts/migrate.js"]
@@ -179,12 +207,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      clamav:
-        condition: service_healthy
-      ollama-init:
-        condition: service_completed_successfully
-      whisper:
-        condition: service_healthy
       bootstrap:
         condition: service_completed_successfully
     volumes:
@@ -195,6 +217,8 @@ services:
     build: .
     command: ["node", "dist/src/worker.js"]
     env_file: ${APP_ENV_FILE:-.env}
+    environment:
+      DOCUMENT_PARSER_BASE_URL: http://document-parser:8090
     read_only: true
     init: true
     pids_limit: 256
@@ -215,11 +239,20 @@ services:
         condition: service_healthy
       wppconnect:
         condition: service_healthy
+      document-parser:
+        condition: service_healthy
       bootstrap:
         condition: service_completed_successfully
     volumes:
       - agrolog_export:/data/agrolog-export
+    networks:
+      - default
+      - document_parser
     restart: unless-stopped
+
+networks:
+  document_parser:
+    internal: true
 
 volumes:
   postgres_data:
