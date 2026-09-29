@@ -173,6 +173,7 @@ export class PostgresBusinessRunStore implements BusinessRunStore {
         const result = decryptJson<BusinessRunResult>(
           row.result_encrypted,
           this.encryptionSecret,
+          'business-run-result',
         );
         if (row.state === 'PENDING_SEND') {
           return { state: 'PENDING_SEND' as const, runId: row.run_id, result };
@@ -194,7 +195,7 @@ export class PostgresBusinessRunStore implements BusinessRunStore {
     runId: string,
     result: BusinessRunResult,
   ): Promise<void> {
-    const encrypted = encryptJson(result, this.encryptionSecret);
+    const encrypted = encryptJson(result, this.encryptionSecret, 'business-run-result');
     const updated = await tenantQuery(
       this.pool,
       tenantId,
