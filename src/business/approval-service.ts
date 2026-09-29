@@ -75,7 +75,7 @@ export class ApprovalService implements ApprovalRequester {
       input: prepared.input,
     })));
     const approvalId = randomUUID();
-    const encrypted = encryptJson({ input: prepared.input }, this.encryptionSecret);
+    const encrypted = encryptJson({ input: prepared.input }, this.encryptionSecret, 'approval-input');
 
     const result = await tenantQuery<{
       approval_id: string;
@@ -202,9 +202,10 @@ export class ApprovalService implements ApprovalRequester {
     const payload = decryptJson<{ input: unknown }>(
       row.input_encrypted,
       this.encryptionSecret,
+      'approval-input',
     );
     const executionResult = row.execution_result_encrypted
-      ? decryptJson<unknown>(row.execution_result_encrypted, this.encryptionSecret)
+      ? decryptJson<unknown>(row.execution_result_encrypted, this.encryptionSecret, 'approval-result')
       : null;
 
     return {
@@ -261,6 +262,7 @@ export class ApprovalService implements ApprovalRequester {
     const payload = decryptJson<{ input: unknown }>(
       claimed.input_encrypted,
       this.encryptionSecret,
+      'approval-input',
     );
 
     let output: unknown;
@@ -285,7 +287,7 @@ export class ApprovalService implements ApprovalRequester {
       throw error;
     }
 
-    const resultEncrypted = encryptJson(output, this.encryptionSecret);
+    const resultEncrypted = encryptJson(output, this.encryptionSecret, 'approval-result');
     const completed = await tenantQuery(
       this.pool,
       input.tenantId,
