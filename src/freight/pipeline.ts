@@ -37,8 +37,9 @@ export class FreightPipeline {
 
   async process(
     message: RawMessage,
+    options: { assumeRelevant?: boolean } = {},
   ): Promise<{ observation: FreightObservation; event?: FreightEvent } | null> {
-    if (!(await this.isRelevant(message))) return null;
+    if (!options.assumeRelevant && !(await this.isRelevant(message))) return null;
 
     const fields = await extractFreight(message.text ?? '', this.llm);
     const quality = assessFreightQuality(fields);
