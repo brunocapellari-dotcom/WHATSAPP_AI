@@ -32,6 +32,7 @@ describe('Freight Intelligence end to end', () => {
     const event = [...repo.freightEvents.values()][0]!;
     expect(event.duplicateCount).toBe(1);
     expect(event.revision).toBe(2);
+    expect(event.scope).toBe('OBSERVED_OFFER');
     expect(event.observationIds).toHaveLength(2);
     expect(event.mergedFields.product.value).toBe('SOJA');
     expect(event.mergedFields.freightValue.value).toBe(162);
