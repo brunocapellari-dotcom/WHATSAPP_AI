@@ -64,13 +64,19 @@ export class ToolRegistry {
       tenantMatch: true,
       explicitlyApproved: context.approved,
     });
+    const traceMetadata = {
+      ...(context.conversationId ? { conversationId: context.conversationId } : {}),
+      ...(context.sourceMessageId ? { sourceMessageId: context.sourceMessageId } : {}),
+      risk: prepared.risk,
+    };
+
     if (!authorization.allowed) {
       await this.audit.write({
         tenantId: context.tenantId,
         actor: context.actor,
         action: name,
         outcome: 'DENY',
-        metadata: { reason: authorization.reason },
+        metadata: { ...traceMetadata, reason: authorization.reason },
       });
       throw new Error(`tool_denied:${authorization.reason}`);
     }
@@ -82,6 +88,7 @@ export class ToolRegistry {
         actor: context.actor,
         action: name,
         outcome: 'ALLOW',
+        metadata: traceMetadata,
       });
       return output;
     } catch (error) {
@@ -90,7 +97,7 @@ export class ToolRegistry {
         actor: context.actor,
         action: name,
         outcome: 'ERROR',
-        metadata: { error: error instanceof Error ? error.message : 'unknown' },
+        metadata: { ...traceMetadata, error: error instanceof Error ? error.message : 'unknown' },
       });
       throw error;
     }
