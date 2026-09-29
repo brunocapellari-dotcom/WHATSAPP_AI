@@ -1,4 +1,4 @@
-import type { MessageRepository } from '../domain/ports.js';
+import type { MessageRepository, PersistFreightResultInput } from '../domain/ports.js';
 import type { FreightEvent, FreightObservation, OutboxEvent, RawMessage } from '../domain/schemas.js';
 
 export class MemoryMessageRepository implements MessageRepository {
@@ -38,6 +38,31 @@ export class MemoryMessageRepository implements MessageRepository {
     const next = merge(this.freightEvents.get(key) ?? null);
     this.freightEvents.set(key, next);
     return next;
+  }
+
+  async persistFreightResult(input: PersistFreightResultInput): Promise<FreightEvent | null> {
+    const eventConfig = input.event;
+    const eventKey = eventConfig
+      ? `${input.observation.tenantId}:${eventConfig.fingerprint}`
+      : null;
+    const existing = eventKey ? this.freightEvents.get(eventKey) ?? null : null;
+    const nextEvent = eventConfig ? eventConfig.merge(existing) : null;
+    const eventOutbox = nextEvent && eventConfig ? eventConfig.outbox(nextEvent) : null;
+
+    if (!this.observations.has(input.observation.observationId)) {
+      this.observations.set(input.observation.observationId, input.observation);
+    }
+    if (!this.outbox.some((item) => item.idempotencyKey === input.observationOutbox.idempotencyKey)) {
+      this.outbox.push(input.observationOutbox);
+    }
+    if (nextEvent && eventKey) {
+      this.freightEvents.set(eventKey, nextEvent);
+    }
+    if (eventOutbox && !this.outbox.some((item) => item.idempotencyKey === eventOutbox.idempotencyKey)) {
+      this.outbox.push(eventOutbox);
+    }
+
+    return nextEvent;
   }
 
   async enqueueOutbox(event: OutboxEvent): Promise<void> {
