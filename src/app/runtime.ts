@@ -26,8 +26,9 @@ import { OperatorService } from '../business/operator-service.js';
 import { ApprovalService } from '../business/approval-service.js';
 import { OperatorOutboundService } from '../business/operator-outbound-service.js';
 import { OperatorAuthService } from '../business/operator-auth-service.js';
+import { DocumentParserClient } from '../security/document-parser-client.js';
 
-export function buildRuntime(config: AppConfig) {
+export function buildRuntime(config: AppConfig, options: { enableMediaProcessing?: boolean } = {}) {
   const pool = new Pool({
     connectionString: config.DATABASE_URL,
     max: config.DATABASE_POOL_MAX,
@@ -79,17 +80,27 @@ export function buildRuntime(config: AppConfig) {
   }
 
   const clamav = new ClamAvScanner(config.CLAMAV_HOST, config.CLAMAV_PORT);
-  const mediaProcessor = new LocalMediaProcessor({
-    ai: localAi,
-    whisperBaseUrl: config.WHISPER_BASE_URL,
-    whisperTimeoutMs: config.WHISPER_TIMEOUT_MS,
-    pdfMaxPages: config.PDF_MAX_PAGES,
-  });
-  const media = {
-    processor: mediaProcessor,
-    scanner: clamav,
+  const documentParser = new DocumentParserClient({
+    baseUrl: config.DOCUMENT_PARSER_BASE_URL,
+    timeoutMs: config.DOCUMENT_PARSER_TIMEOUT_MS,
     maxBytes: config.ATTACHMENT_MAX_BYTES,
-  };
+  });
+  const mediaProcessor = options.enableMediaProcessing === false
+    ? undefined
+    : new LocalMediaProcessor({
+        ai: localAi,
+        whisperBaseUrl: config.WHISPER_BASE_URL,
+        whisperTimeoutMs: config.WHISPER_TIMEOUT_MS,
+        pdfMaxPages: config.PDF_MAX_PAGES,
+        documentParser,
+      });
+  const media = mediaProcessor
+    ? {
+        processor: mediaProcessor,
+        scanner: clamav,
+        maxBytes: config.ATTACHMENT_MAX_BYTES,
+      }
+    : undefined;
 
   const audit = new PostgresAuditSink(pool);
   const conversations = new PostgresConversationStore(pool, config.APP_ENCRYPTION_KEY);
@@ -149,5 +160,6 @@ export function buildRuntime(config: AppConfig) {
     clamav,
     localAi,
     mediaProcessor,
+    documentParser,
   };
 }
