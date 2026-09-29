@@ -3,7 +3,7 @@ import { buildRuntime } from './app/runtime.js';
 import { buildHttpApp } from './http/app.js';
 
 const config = loadConfig();
-const runtime = buildRuntime(config);
+const runtime = buildRuntime(config, { enableMediaProcessing: false });
 const app = await buildHttpApp({
   config,
   collectors: runtime.collectors,
