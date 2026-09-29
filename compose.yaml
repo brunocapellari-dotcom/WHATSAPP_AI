@@ -56,14 +56,32 @@ services:
       context: .
       dockerfile: docker/whisper/Dockerfile
       args:
-        WHISPER_CPP_REF: v1.9.4
+        WHISPER_CPP_COMMIT: 927cfce34f31707e17f2bff35c349632fb9e2c3a
     environment:
       WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_MODEL_SHA256: ${WHISPER_MODEL_SHA256:-}
     entrypoint: ["/bin/sh", "-lc"]
     command:
       - |
-        test -s "/models/ggml-$$WHISPER_MODEL.bin" ||
-        /opt/whisper/models/download-ggml-model.sh "$$WHISPER_MODEL" /models
+        set -eu
+        case "$WHISPER_MODEL" in
+          small)
+            expected_sha="${WHISPER_MODEL_SHA256:-1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b}"
+            ;;
+          *)
+            test -n "$WHISPER_MODEL_SHA256" || {
+              echo "WHISPER_MODEL_SHA256 is required for model $WHISPER_MODEL" >&2
+              exit 1
+            }
+            expected_sha="$WHISPER_MODEL_SHA256"
+            ;;
+        esac
+        model_path="/models/ggml-$WHISPER_MODEL.bin"
+        if test -s "$model_path" && ! printf '%s  %s\n' "$expected_sha" "$model_path" | sha256sum -c -; then
+          rm -f "$model_path"
+        fi
+        test -s "$model_path" || /opt/whisper/models/download-ggml-model.sh "$WHISPER_MODEL" /models
+        printf '%s  %s\n' "$expected_sha" "$model_path" | sha256sum -c -
     volumes:
       - whisper_models:/models
     restart: "no"
@@ -73,7 +91,7 @@ services:
       context: .
       dockerfile: docker/whisper/Dockerfile
       args:
-        WHISPER_CPP_REF: v1.9.4
+        WHISPER_CPP_COMMIT: 927cfce34f31707e17f2bff35c349632fb9e2c3a
     command:
       - whisper-server
       - --host
