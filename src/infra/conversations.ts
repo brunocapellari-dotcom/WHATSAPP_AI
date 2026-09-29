@@ -52,7 +52,7 @@ export class PostgresConversationStore implements ConversationStore {
   async ensure(message: RawMessage): Promise<{ conversationId: string; state: 'OPEN' | 'WAITING_HUMAN' | 'HUMAN' | 'CLOSED' }> {
     const conversationId = randomUUID();
     const encryptedRouting = message.routingAddress
-      ? encryptJson({ routingAddress: message.routingAddress }, this.encryptionSecret)
+      ? encryptJson({ routingAddress: message.routingAddress }, this.encryptionSecret, 'conversation-routing')
       : null;
 
     const result = await tenantQuery<{ conversation_id: string; state: 'OPEN' | 'WAITING_HUMAN' | 'HUMAN' | 'CLOSED' }>(
@@ -101,6 +101,7 @@ export class PostgresConversationStore implements ConversationStore {
     const decrypted = decryptJson<{ routingAddress?: string }>(
       row.routing_address_encrypted,
       this.encryptionSecret,
+      'conversation-routing',
     );
     if (!decrypted.routingAddress) return null;
     return { provider: row.provider, routingAddress: decrypted.routingAddress };
