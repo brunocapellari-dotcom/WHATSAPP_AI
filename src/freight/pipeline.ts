@@ -184,6 +184,7 @@ export class FreightPipeline {
             mergedFields: fields,
             duplicateCount: 0,
             revision: 1,
+            scope: 'OBSERVED_OFFER',
             status: 'ACTIVE',
             schemaVersion: 1,
           };
