@@ -1,10 +1,9 @@
 name: Release Gate
+# Security boundary: this privileged self-hosted workflow never runs directly from pull_request events.
 on:
   workflow_dispatch:
   push:
     branches: [main, 'build/**']
-  pull_request:
-    branches: [main]
   schedule:
     - cron: '23 7 * * 1'
 
