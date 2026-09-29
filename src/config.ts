@@ -80,6 +80,8 @@ const ConfigSchema = z.object({
   LOCAL_AI_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(10 * 60_000).default(120_000),
   WHISPER_BASE_URL: z.string().url().default('http://127.0.0.1:8080'),
   WHISPER_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(10 * 60_000).default(120_000),
+  DOCUMENT_PARSER_BASE_URL: z.string().url().default('http://127.0.0.1:8090'),
+  DOCUMENT_PARSER_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(20_000),
   PDF_MAX_PAGES: z.coerce.number().int().min(1).max(50).default(12),
 
   AGROLOG_GATEWAY_URL: z.string().url().optional(),
@@ -118,6 +120,7 @@ const ConfigSchema = z.object({
     for (const [field, endpoint] of [
       ['LOCAL_AI_BASE_URL', value.LOCAL_AI_BASE_URL],
       ['WHISPER_BASE_URL', value.WHISPER_BASE_URL],
+      ['DOCUMENT_PARSER_BASE_URL', value.DOCUMENT_PARSER_BASE_URL],
       ...(value.AGROLOG_GATEWAY_URL ? [['AGROLOG_GATEWAY_URL', value.AGROLOG_GATEWAY_URL] as const] : []),
     ] as const) {
       if (!isInternalEndpoint(endpoint)) {
