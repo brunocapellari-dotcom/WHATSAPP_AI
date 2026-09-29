@@ -4,7 +4,7 @@ import { loadConfig } from '../../src/config.js';
 const baseEnv = {
   APP_ENCRYPTION_KEY: 'a'.repeat(32),
   PII_HMAC_KEY: 'b'.repeat(32),
-  INTERNAL_API_KEY: 'internal-api-key-123456',
+  INTERNAL_API_KEY: 'c'.repeat(32),
 };
 
 describe('configuration safety', () => {
@@ -57,6 +57,7 @@ describe('configuration safety', () => {
     for (const [field, value] of [
       ['LOCAL_AI_BASE_URL', 'https://paid.example.com'],
       ['WHISPER_BASE_URL', 'https://speech.example.com'],
+      ['DOCUMENT_PARSER_BASE_URL', 'https://parser.example.com'],
       ['AGROLOG_GATEWAY_URL', 'https://cloud.example.com'],
     ] as const) {
       const env: Record<string, string> = { ...baseEnv, [field]: value };
@@ -70,11 +71,38 @@ describe('configuration safety', () => {
       ...baseEnv,
       LOCAL_AI_BASE_URL: 'http://ollama:11434',
       WHISPER_BASE_URL: 'http://whisper:8080',
+      DOCUMENT_PARSER_BASE_URL: 'http://document-parser:8090',
       AGROLOG_GATEWAY_URL: 'http://agrolog.internal:8080',
       AGROLOG_GATEWAY_TOKEN: 'internal-token',
     });
     expect(config.LOCAL_AI_BASE_URL).toBe('http://ollama:11434');
     expect(config.WHISPER_BASE_URL).toBe('http://whisper:8080');
+    expect(config.DOCUMENT_PARSER_BASE_URL).toBe('http://document-parser:8090');
+  });
+
+
+  it('rejects arbitrary single-label hosts and external WPP endpoints in zero-cost mode', () => {
+    expect(() => loadConfig({
+      ...baseEnv,
+      LOCAL_AI_BASE_URL: 'http://not-a-local-service:11434',
+    })).toThrow(/local\/private endpoint/i);
+
+    expect(() => loadConfig({
+      ...baseEnv,
+      WPP_BASE_URL: 'https://wpp.example.com',
+      WPP_API_TOKEN: 'wpp-token',
+      WPP_COLLECTOR_ID: 'wpp-freight-default',
+    })).toThrow(/local\/private endpoint/i);
+  });
+
+  it('requires distinct long-lived local secrets in production', () => {
+    expect(() => loadConfig({
+      ...baseEnv,
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgres://user:strong-password@db/whatsapp_ai',
+      METRICS_TOKEN: 'c'.repeat(32),
+      LOCAL_AI_MODEL_DIGEST: 'a'.repeat(64),
+    })).toThrow(/must not reuse|same secret/i);
   });
 
   it('requires the zero-cost WPP provider tuple together but not a direct webhook secret', () => {
@@ -105,14 +133,14 @@ describe('configuration safety', () => {
       ...baseEnv,
       NODE_ENV: 'production',
       DATABASE_URL: 'postgres://user:strong-password@db/whatsapp_ai',
-      METRICS_TOKEN: 'metrics-token-123456',
+      METRICS_TOKEN: 'd'.repeat(32),
     })).toThrow(/LOCAL_AI_MODEL_DIGEST/);
 
     const config = loadConfig({
       ...baseEnv,
       NODE_ENV: 'production',
       DATABASE_URL: 'postgres://user:strong-password@db/whatsapp_ai',
-      METRICS_TOKEN: 'metrics-token-123456',
+      METRICS_TOKEN: 'd'.repeat(32),
       LOCAL_AI_MODEL_DIGEST: 'a'.repeat(64),
     });
     expect(config.LOCAL_AI_MODEL_DIGEST).toBe('a'.repeat(64));
@@ -123,7 +151,7 @@ describe('configuration safety', () => {
       ...baseEnv,
       NODE_ENV: 'production',
       DATABASE_URL: 'postgres://whatsapp_ai:change_me@db/whatsapp_ai',
-      METRICS_TOKEN: 'metrics-token-123456',
+      METRICS_TOKEN: 'd'.repeat(32),
       APP_ENCRYPTION_KEY: 'replace-with-32-byte-minimum-secret',
     })).toThrow();
   });
