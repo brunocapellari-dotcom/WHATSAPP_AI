@@ -31,6 +31,7 @@ describe('Freight Intelligence end to end', () => {
     expect(repo.freightEvents.size).toBe(1);
     const event = [...repo.freightEvents.values()][0]!;
     expect(event.duplicateCount).toBe(1);
+    expect(event.revision).toBe(2);
     expect(event.observationIds).toHaveLength(2);
     expect(event.mergedFields.product.value).toBe('SOJA');
     expect(event.mergedFields.freightValue.value).toBe(162);
@@ -104,6 +105,7 @@ describe('Freight Intelligence end to end', () => {
 
     const event = [...repo.freightEvents.values()][0]!;
     expect(event.duplicateCount).toBe(0);
+    expect(event.revision).toBe(1);
     expect(event.observationIds).toHaveLength(1);
     expect(repo.outbox.filter((x) => x.topic === 'agrolog.freight_observation.v1')).toHaveLength(1);
     expect(repo.outbox.filter((x) => x.topic === 'agrolog.freight_event.v1')).toHaveLength(1);
