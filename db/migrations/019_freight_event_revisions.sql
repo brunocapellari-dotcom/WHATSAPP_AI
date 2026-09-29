@@ -5,13 +5,20 @@ UPDATE freight_events
 SET payload = jsonb_set(payload, '{revision}', to_jsonb(revision), true)
 WHERE NOT (payload ? 'revision');
 
+ALTER TABLE freight_events
+  ADD CONSTRAINT freight_events_tenant_event_unique UNIQUE (tenant_id, freight_event_id);
+
 CREATE TABLE IF NOT EXISTS freight_event_revisions (
-  freight_event_id uuid NOT NULL REFERENCES freight_events(freight_event_id) ON DELETE CASCADE,
+  freight_event_id uuid NOT NULL,
   tenant_id text NOT NULL REFERENCES tenants(tenant_id),
   revision integer NOT NULL CHECK (revision >= 1),
   payload jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (freight_event_id, revision)
+  PRIMARY KEY (freight_event_id, revision),
+  CONSTRAINT freight_event_revisions_tenant_event_fkey
+    FOREIGN KEY (tenant_id, freight_event_id)
+    REFERENCES freight_events(tenant_id, freight_event_id)
+    ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_freight_event_revisions_tenant_event
