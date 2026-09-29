@@ -28,19 +28,29 @@ if [[ ! -f package-lock.json ]]; then
 fi
 
 echo "== direct dependency provenance =="
-REMOTE_DEPENDENCIES="$(node --input-type=module -e '
-  import fs from "node:fs";
-  const pkg = JSON.parse(fs.readFileSync("package.json","utf8"));
-  const deps = {...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {})};
-  for (const [name, spec] of Object.entries(deps)) {
-    if (/^https?:\/\//i.test(String(spec))) console.log(name + "=" + spec);
+node --input-type=module <<'NODE'
+import fs from 'node:fs';
+
+const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+const allowedRemote = new Map([
+  ['xlsx', 'https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz'],
+]);
+
+for (const [name, rawSpec] of Object.entries(deps)) {
+  const spec = String(rawSpec);
+  if (!/^https?:\/\//i.test(spec)) continue;
+  if (allowedRemote.get(name) !== spec) {
+    throw new Error(`unapproved_remote_dependency:${name}=${spec}`);
   }
-')"
-if [[ -n "$REMOTE_DEPENDENCIES" ]]; then
-  echo "Release blocked: direct HTTP dependencies must be vendored and committed:" >&2
-  echo "$REMOTE_DEPENDENCIES" >&2
-  exit 1
-fi
+
+  const locked = lock.packages?.[`node_modules/${name}`];
+  if (!locked || locked.resolved !== spec || !/^sha512-/.test(String(locked.integrity ?? ''))) {
+    throw new Error(`remote_dependency_missing_lock_integrity:${name}`);
+  }
+}
+NODE
 
 if ! git diff --quiet -- package.json package-lock.json; then
   echo "package manifest/lockfile has uncommitted changes." >&2
