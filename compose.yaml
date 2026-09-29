@@ -66,7 +66,7 @@ services:
         set -eu
         case "$WHISPER_MODEL" in
           small)
-            expected_sha="${WHISPER_MODEL_SHA256:-1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b}"
+            expected_sha=" ${WHISPER_MODEL_SHA256:-1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b}"
             ;;
           *)
             test -n "$WHISPER_MODEL_SHA256" || {
