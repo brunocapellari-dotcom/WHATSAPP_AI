@@ -23,7 +23,9 @@
     "db:restore:rehearsal": "bash scripts/restore-rehearsal.sh",
     "data:import:entities": "tsx scripts/import-canonical-entities.ts",
     "data:sync:antt-rntrc": "tsx scripts/sync-antt-rntrc.ts",
-    "model:digest": "tsx scripts/print-model-digest.ts"
+    "model:digest": "tsx scripts/print-model-digest.ts",
+    "test:contract": "vitest run tests/contract",
+    "schema:export": "tsx scripts/export-schemas.ts"
   },
   "keywords": [],
   "author": "",
@@ -43,7 +45,7 @@
     "file-type": "22.1.1",
     "mammoth": "1.12.3",
     "pg": "8.23.0",
-    "pg-boss": "12.33.4",
+    "pg-boss": "12.33.6",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "4.6.5",
     "yauzl": "3.4.0"
