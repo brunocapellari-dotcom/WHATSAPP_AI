@@ -32,6 +32,7 @@ export class WebhookInbox {
     const encrypted = encryptJson(
       { rawBodyBase64: Buffer.from(input.rawBody).toString('base64') } satisfies StoredEnvelope,
       this.encryptionSecret,
+      'webhook-inbox',
     );
 
     const inserted = await tenantQuery<{ ingress_id: string }>(
@@ -104,7 +105,7 @@ export class WebhookInbox {
     );
 
     return result.rows.map((row) => {
-      const envelope = decryptJson<StoredEnvelope>(row.encrypted_payload, this.encryptionSecret);
+      const envelope = decryptJson<StoredEnvelope>(row.encrypted_payload, this.encryptionSecret, 'webhook-inbox');
       const raw = Buffer.from(envelope.rawBodyBase64, 'base64').toString('utf8');
       return {
         ingressId: row.ingress_id,
