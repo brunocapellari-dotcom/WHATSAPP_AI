@@ -1,0 +1,313 @@
+import type { BusinessDecisionModel, BusinessToolResult } from '../domain/ports.js';
+import { assessUntrustedText } from '../security/policy.js';
+import type { ToolContext, ToolRegistry } from './tool-registry.js';
+import type { ApprovalRequester } from './approval-service.js';
+
+export type AgentRole =
+  | 'FRONT_DESK'
+  | 'SALES'
+  | 'QUOTE'
+  | 'CRM'
+  | 'SCHEDULING'
+  | 'SUPPORT'
+  | 'HUMAN_HANDOFF';
+
+type RuntimeToolResult = BusinessToolResult;
+
+export class AgentRuntime {
+  constructor(
+    private readonly tools: ToolRegistry,
+    private readonly model?: BusinessDecisionModel,
+    private readonly approvals?: ApprovalRequester,
+  ) {}
+
+  async inspectInbound(text: string) {
+    const security = assessUntrustedText(text);
+    return {
+      security,
+      toolCatalog: this.tools.list(),
+      llmConfigured: Boolean(this.model),
+    };
+  }
+
+  async executeTool(
+    role: AgentRole,
+    tool: string,
+    input: unknown,
+    context: Omit<ToolContext, 'actor'>,
+  ) {
+    return this.tools.call(tool, input, {
+      ...context,
+      actor: `agent:${role}`,
+    });
+  }
+
+  async forceHandoff(reason: string, context: Omit<ToolContext, 'actor'>) {
+    const toolResults: RuntimeToolResult[] = [];
+    await this.persistHandoff(reason, context, toolResults);
+    return {
+      persisted: toolResults.some(
+        (result) => result.name === 'transferir_humano' && result.ok,
+      ),
+      toolResults,
+    };
+  }
+
+  async handleMessage(text: string, context: Omit<ToolContext, 'actor'>) {
+    const inspection = await this.inspectInbound(text);
+    const toolResults: RuntimeToolResult[] = [];
+
+    if (!this.model) {
+      await this.persistHandoff('llm_unavailable', context, toolResults);
+      return {
+        role: 'HUMAN_HANDOFF' as const,
+        reply: 'Atendimento automático indisponível; transferindo para atendimento humano.',
+        handoff: true,
+        handoffReason: 'llm_unavailable',
+        toolResults,
+        suspiciousInput: inspection.security.suspicious,
+      };
+    }
+
+    const plan = await this.model.plan({
+      message: inspection.security.content,
+      tools: inspection.toolCatalog,
+      suspicious: inspection.security.suspicious,
+    });
+
+    const preparedCalls: Array<{
+      name: string;
+      input: unknown;
+      risk: 'READ' | 'WRITE' | 'FINANCIAL' | 'IRREVERSIBLE';
+    }> = [];
+
+    for (const call of plan.toolCalls) {
+      try {
+        const prepared = this.tools.prepare(call.name, call.input);
+        preparedCalls.push({
+          name: prepared.name,
+          input: prepared.input,
+          risk: prepared.risk,
+        });
+      } catch (error) {
+        toolResults.push({
+          name: call.name,
+          ok: false,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      }
+    }
+
+    if (toolResults.some((result) => !result.ok)) {
+      await this.persistHandoff('tool_validation_failure', context, toolResults);
+      return {
+        role: 'HUMAN_HANDOFF' as const,
+        reply: 'Não consegui validar uma ação automática com segurança. Vou transferir para atendimento humano.',
+        handoff: true,
+        handoffReason: 'tool_validation_failure',
+        toolResults,
+        suspiciousInput: inspection.security.suspicious,
+      };
+    }
+
+    const highRiskCalls = preparedCalls.filter(
+      (call) => call.risk === 'FINANCIAL' || call.risk === 'IRREVERSIBLE',
+    );
+
+    if (highRiskCalls.length > 0) {
+      if (
+        !this.approvals
+        || !context.conversationId
+        || !context.sourceMessageId
+      ) {
+        toolResults.push({
+          name: 'approval_workflow',
+          ok: false,
+          error: 'approval_context_unavailable',
+        });
+        await this.persistHandoff('approval_context_unavailable', context, toolResults);
+        return {
+          role: 'HUMAN_HANDOFF' as const,
+          reply: 'A ação exige aprovação humana, mas não consegui registrar a solicitação com segurança.',
+          handoff: true,
+          handoffReason: 'approval_context_unavailable',
+          toolResults,
+          suspiciousInput: inspection.security.suspicious,
+        };
+      }
+
+      for (const call of highRiskCalls) {
+        try {
+          const requested = await this.approvals.request({
+            tenantId: context.tenantId,
+            conversationId: context.conversationId,
+            sourceMessageId: context.sourceMessageId,
+            toolName: call.name,
+            risk: call.risk,
+            toolInput: call.input,
+            requestedBy: `agent:${plan.role}`,
+          });
+          toolResults.push({
+            name: call.name,
+            ok: true,
+            output: {
+              approvalId: requested.approvalId,
+              approvalStatus: requested.status,
+              executed: false,
+            },
+          });
+        } catch (error) {
+          toolResults.push({
+            name: call.name,
+            ok: false,
+            error: error instanceof Error ? error.message : 'approval_request_failed',
+          });
+        }
+      }
+
+      const approvalFailed = toolResults.some((result) => !result.ok);
+      await this.persistHandoff(
+        approvalFailed ? 'approval_request_failed' : 'human_approval_required',
+        context,
+        toolResults,
+      );
+
+      return {
+        role: 'HUMAN_HANDOFF' as const,
+        reply: approvalFailed
+          ? 'A ação exige aprovação humana, mas não consegui registrar todas as solicitações com segurança.'
+          : 'A ação solicitada exige aprovação humana antes de ser executada. O atendimento foi encaminhado para revisão.',
+        handoff: true,
+        handoffReason: approvalFailed
+          ? 'approval_request_failed'
+          : 'human_approval_required',
+        toolResults,
+        suspiciousInput: inspection.security.suspicious,
+      };
+    }
+
+    for (const call of preparedCalls) {
+      try {
+        const output = await this.executeTool(plan.role, call.name, call.input, context);
+        toolResults.push({ name: call.name, ok: true, output });
+      } catch (error) {
+        toolResults.push({
+          name: call.name,
+          ok: false,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      }
+    }
+
+    const plannedToolFailed = toolResults.some((result) => !result.ok);
+    const handoffReason = plannedToolFailed
+      ? 'tool_failure'
+      : plan.handoffReason ?? (plan.handoff ? 'agent_handoff' : null);
+    const handoff = plan.handoff || plannedToolFailed;
+
+    if (handoff) {
+      await this.persistHandoff(handoffReason ?? 'agent_handoff', context, toolResults);
+    }
+
+    const persistenceFailed = toolResults.some(
+      (result) => result.name === 'transferir_humano' && !result.ok,
+    );
+    const anyFailure = plannedToolFailed || persistenceFailed;
+
+    if (anyFailure || handoff) {
+      return {
+        role: 'HUMAN_HANDOFF' as const,
+        reply: anyFailure
+          ? 'Não consegui concluir uma ação com segurança; vou transferir para atendimento humano.'
+          : plan.reply,
+        handoff: true,
+        handoffReason: anyFailure ? 'tool_failure' : handoffReason,
+        toolResults,
+        suspiciousInput: inspection.security.suspicious,
+      };
+    }
+
+    if (this.model.finalize && toolResults.length > 0) {
+      try {
+        const final = await this.model.finalize({
+          message: inspection.security.content,
+          plan,
+          toolResults,
+        });
+        if (final.handoff) {
+          const before = toolResults.filter(
+            (result) => result.name === 'transferir_humano' && result.ok,
+          ).length;
+          await this.persistHandoff(
+            final.handoffReason ?? 'finalization_handoff',
+            context,
+            toolResults,
+          );
+          const after = toolResults.filter(
+            (result) => result.name === 'transferir_humano' && result.ok,
+          ).length;
+          if (after === before && before === 0 && context.conversationId) {
+            throw new Error('finalization_handoff_persistence_failed');
+          }
+        }
+        return {
+          role: final.handoff ? 'HUMAN_HANDOFF' as const : plan.role,
+          reply: final.reply,
+          handoff: final.handoff,
+          handoffReason: final.handoffReason,
+          toolResults,
+          suspiciousInput: inspection.security.suspicious,
+        };
+      } catch (error) {
+        toolResults.push({
+          name: 'business_finalize',
+          ok: false,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+        await this.persistHandoff('finalization_failure', context, toolResults);
+        return {
+          role: 'HUMAN_HANDOFF' as const,
+          reply: 'A ação foi registrada, mas não consegui confirmar a resposta final com segurança. Vou transferir para atendimento humano.',
+          handoff: true,
+          handoffReason: 'finalization_failure',
+          toolResults,
+          suspiciousInput: inspection.security.suspicious,
+        };
+      }
+    }
+
+    return {
+      role: plan.role,
+      reply: plan.reply,
+      handoff: false,
+      handoffReason: null,
+      toolResults,
+      suspiciousInput: inspection.security.suspicious,
+    };
+  }
+
+  private async persistHandoff(
+    reason: string,
+    context: Omit<ToolContext, 'actor'>,
+    toolResults: RuntimeToolResult[],
+  ) {
+    if (!context.conversationId || !this.tools.has('transferir_humano')) return;
+    if (toolResults.some((result) => result.name === 'transferir_humano' && result.ok)) return;
+
+    try {
+      const output = await this.executeTool(
+        'HUMAN_HANDOFF',
+        'transferir_humano',
+        { reason },
+        context,
+      );
+      toolResults.push({ name: 'transferir_humano', ok: true, output });
+    } catch (error) {
+      toolResults.push({
+        name: 'transferir_humano',
+        ok: false,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+  }
+}

@@ -1,0 +1,3 @@
+import { createHmac } from 'node:crypto';import { constantTimeEquals } from './crypto.js';
+export function verifyMetaSignature(rawBody:Uint8Array,signatureHeader:string|undefined,appSecret:string):boolean{if(!signatureHeader?.startsWith('sha256='))return false;const expected=`sha256=${createHmac('sha256',appSecret).update(rawBody).digest('hex')}`;return constantTimeEquals(signatureHeader,expected);}
+export function verifyWebhookChallenge(input:{mode?:string;verifyToken?:string;challenge?:string;expectedVerifyToken:string}):string|null{if(input.mode!=='subscribe')return null;if(!input.verifyToken||!constantTimeEquals(input.verifyToken,input.expectedVerifyToken))return null;return input.challenge??null;}

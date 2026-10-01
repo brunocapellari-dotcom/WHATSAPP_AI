@@ -1,0 +1,8 @@
+[
+  {"text":"SOJA\nOrigem: Roo/MT\nDestino: Sorriso/MT\nFrete R$ 162,00\nOferta: 174816","product":"SOJA","origin":"Roo/MT","destination":"Sorriso/MT","freightValue":162,"offerId":"174816"},
+  {"text":"MILHO\nOrigem: Sinop/MT\nDestino: Rondonópolis/MT\nFrete: 190,00 / ton\n3 vagas","product":"MILHO","origin":"Sinop/MT","destination":"Rondonópolis/MT","freightValue":190},
+  {"text":"FARELO DE SOJA\nOrigem: Lucas do Rio Verde/MT\nDestino: Cuiabá/MT\nValor R$ 145,50","product":"FARELO DE SOJA","origin":"Lucas do Rio Verde/MT","destination":"Cuiabá/MT","freightValue":145.5},
+  {"text":"SOJA\nOrigem: Sapezal/MT\nDestino: Rondonopolis/MT\nFrete R$ 210,00 + PED 15,00","product":"SOJA","origin":"Sapezal/MT","destination":"Rondonopolis/MT","freightValue":210},
+  {"text":"MILHO\nOrigem: Nova Mutum/MT\nDestino: Rondonópolis/MT\nFrete R$ 175,00\nOferta ABC123","product":"MILHO","origin":"Nova Mutum/MT","destination":"Rondonópolis/MT","freightValue":175,"offerId":"ABC123"},
+  {"text":"Bom dia pessoal, alguém sabe se vai chover?","irrelevant":true}
+]

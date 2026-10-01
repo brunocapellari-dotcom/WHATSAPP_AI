@@ -1,0 +1,64 @@
+rules:
+  - id: whatsapp-ai-no-eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Dynamic code evaluation is forbidden.
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: new Function(...)
+
+  - id: whatsapp-ai-no-shell-exec
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Shell command execution is forbidden; use execFile/spawn without a shell and fixed binaries.
+    patterns:
+      - pattern-either:
+          - pattern: exec(...)
+          - pattern: execSync(...)
+          - pattern: $CP.exec(...)
+          - pattern: $CP.execSync(...)
+
+  - id: whatsapp-ai-no-shell-true
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: child_process with shell=true is forbidden.
+    patterns:
+      - pattern-either:
+          - pattern: spawn($CMD, $ARGS, { ..., shell: true, ... })
+          - pattern: spawnSync($CMD, $ARGS, { ..., shell: true, ... })
+          - pattern: execFile($CMD, $ARGS, { ..., shell: true, ... })
+          - pattern: execFileSync($CMD, $ARGS, { ..., shell: true, ... })
+
+  - id: whatsapp-ai-no-openai-runtime
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Paid OpenAI runtime imports are forbidden by ZERO_COST_MODE.
+    patterns:
+      - pattern-either:
+          - pattern: import $X from "openai"
+          - pattern: import { ... } from "openai"
+          - pattern: require("openai")
+
+  - id: whatsapp-ai-no-process-shell
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Spawning a shell interpreter from application code is forbidden.
+    patterns:
+      - pattern-either:
+          - pattern: execFile("/bin/sh", ...)
+          - pattern: execFile("sh", ...)
+          - pattern: execFile("bash", ...)
+          - pattern: spawn("/bin/sh", ...)
+          - pattern: spawn("sh", ...)
+          - pattern: spawn("bash", ...)
+
+
+  - id: whatsapp-ai-no-worker-eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Worker threads must execute static files; eval-based workers are forbidden.
+    patterns:
+      - pattern-either:
+          - pattern: new Worker($CODE, { ..., eval: true, ... })
+          - pattern: new $WT.Worker($CODE, { ..., eval: true, ... })

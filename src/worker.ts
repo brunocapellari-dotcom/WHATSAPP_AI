@@ -1,0 +1,229 @@
+import { Pool } from 'pg';
+import { loadConfig } from './config.js';
+import { buildRuntime } from './app/runtime.js';
+import { JobQueue } from './infra/job-queue.js';
+import { AgroLogOutboxPublisher, LocalAgroLogOutboxPublisher } from './infra/agrolog-outbox.js';
+import { QuarantineRetention } from './infra/retention.js';
+import { WebhookInbox } from './infra/webhook-inbox.js';
+import { WppReconciliationService } from './app/wpp-reconciliation-service.js';
+import { FollowupDeliveryService } from './business/followup-delivery-service.js';
+import { PostgresConversationStore } from './infra/conversations.js';
+
+const config = loadConfig();
+const workerDatabaseUrl = config.WORKER_DATABASE_URL ?? config.DATABASE_URL;
+
+if (config.NODE_ENV === 'production' && !config.WORKER_DATABASE_URL) {
+  throw new Error('WORKER_DATABASE_URL is required in production for the privileged cross-tenant worker role');
+}
+
+const privilegedPool = new Pool({
+  connectionString: workerDatabaseUrl,
+  max: 10,
+  application_name: 'whatsapp-ai-worker-privileged',
+});
+
+const processingRuntime = buildRuntime(config);
+const queue = new JobQueue(workerDatabaseUrl);
+const retention = new QuarantineRetention(privilegedPool);
+const inbox = new WebhookInbox(privilegedPool, config.APP_ENCRYPTION_KEY);
+const privilegedConversations = new PostgresConversationStore(
+  privilegedPool,
+  config.APP_ENCRYPTION_KEY,
+);
+const followups = new FollowupDeliveryService(
+  privilegedPool,
+  processingRuntime.providers,
+  privilegedConversations,
+);
+
+const wppProvider = processingRuntime.providers.get('wppconnect');
+const wppReconciliation = config.WPP_COLLECTOR_ID && wppProvider
+  ? new WppReconciliationService(
+      processingRuntime.collectors,
+      inbox,
+      config.WEBHOOK_MAX_BYTES,
+    )
+  : undefined;
+
+const publisher = config.AGROLOG_GATEWAY_URL && config.AGROLOG_GATEWAY_TOKEN
+  ? new AgroLogOutboxPublisher(privilegedPool, {
+      gatewayUrl: config.AGROLOG_GATEWAY_URL,
+      token: config.AGROLOG_GATEWAY_TOKEN,
+    })
+  : new LocalAgroLogOutboxPublisher(privilegedPool, {
+      exportDir: config.AGROLOG_EXPORT_DIR,
+    });
+
+function reportBackgroundError(component: string, error: unknown) {
+  processingRuntime.metrics.failures.inc({ component });
+  console.error(component, error);
+}
+
+function runBackground(component: string, task: () => Promise<unknown>) {
+  void task().catch((error) => reportBackgroundError(component, error));
+}
+
+await queue.start();
+
+if (publisher) {
+  await queue.workOutbox(async () => {
+    await publisher.publishBatch();
+  });
+}
+
+await queue.workFollowups(async () => {
+  await followups.deliverBatch();
+});
+
+await queue.workQuarantinePurge(async () => {
+  await retention.purgeExpired();
+  await inbox.purgeExpired();
+});
+
+let inboxDrainRunning = false;
+
+async function drainInbox() {
+  if (inboxDrainRunning) return;
+  inboxDrainRunning = true;
+
+  try {
+    const batch = await inbox.claimBatch(20);
+    for (const item of batch) {
+      try {
+        const rows = await processingRuntime.ingestion.ingest(
+          item.provider,
+          item.collectorId,
+          item.payload,
+        );
+        for (const row of rows) {
+          processingRuntime.metrics.messages.inc({
+            provider: item.provider,
+            disposition: row.disposition,
+          });
+          if (row.disposition === 'DUPLICATE') {
+            processingRuntime.metrics.duplicateRate.inc({ kind: 'message' });
+          }
+          if (row.freightDuplicate) {
+            processingRuntime.metrics.duplicateRate.inc({ kind: 'freight_event' });
+          }
+          if (row.freightQualityScore !== undefined) {
+            processingRuntime.metrics.freightQuality.observe(row.freightQualityScore);
+          }
+          if (row.handoff) {
+            processingRuntime.metrics.handoffs.inc({ source: 'business' });
+          }
+          console.info('processing_trace', {
+            traceId: item.ingressId,
+            provider: item.provider,
+            collectorId: item.collectorId,
+            eventId: row.message.eventId,
+            disposition: row.disposition,
+            ...(row.freightEventId ? { freightEventId: row.freightEventId } : {}),
+            ...(row.conversationId ? { conversationId: row.conversationId } : {}),
+            ...(row.handoff !== undefined ? { handoff: row.handoff } : {}),
+          });
+        }
+        processingRuntime.metrics.collectorHealth.set({
+          collector: item.collectorId,
+          provider: item.provider,
+        }, 1);
+
+        const completed = await inbox.complete(item.ingressId, item.lockToken);
+        if (!completed) {
+          processingRuntime.metrics.failures.inc({ component: 'webhook-inbox-lease-lost' });
+          console.warn('webhook-inbox-lease-lost', { ingressId: item.ingressId });
+        }
+      } catch (error) {
+        processingRuntime.metrics.failures.inc({ component: 'webhook-inbox-processing' });
+        processingRuntime.metrics.collectorHealth.set({
+          collector: item.collectorId,
+          provider: item.provider,
+        }, 0);
+
+        try {
+          const failed = await inbox.fail(
+            item.ingressId,
+            item.lockToken,
+            item.attempts,
+            error instanceof Error ? error.message : 'webhook_processing_failed',
+          );
+          if (!failed) {
+            processingRuntime.metrics.failures.inc({ component: 'webhook-inbox-lease-lost' });
+            console.warn('webhook-inbox-fail-lease-lost', { ingressId: item.ingressId });
+          }
+        } catch (stateError) {
+          reportBackgroundError('webhook-inbox-failure-persist', stateError);
+        }
+      }
+    }
+  } finally {
+    inboxDrainRunning = false;
+  }
+}
+
+let wppReconcileRunning = false;
+
+async function reconcileWpp() {
+  if (!wppReconciliation || !wppProvider || !config.WPP_COLLECTOR_ID || wppReconcileRunning) return;
+  wppReconcileRunning = true;
+  try {
+    const result = await wppReconciliation.run(wppProvider, config.WPP_COLLECTOR_ID);
+    if (result.queued > 0) {
+      processingRuntime.metrics.reconciliationMessages.inc(
+        { provider: 'wppconnect', outcome: 'queued' },
+        result.queued,
+      );
+    }
+    if (result.duplicates > 0) {
+      processingRuntime.metrics.reconciliationMessages.inc(
+        { provider: 'wppconnect', outcome: 'duplicate' },
+        result.duplicates,
+      );
+    }
+  } finally {
+    wppReconcileRunning = false;
+  }
+}
+
+const inboxTimer = setInterval(() => {
+  runBackground('webhook-inbox-drain', drainInbox);
+}, 1_000);
+
+const wppReconciliationTimer = wppReconciliation
+  ? setInterval(() => {
+      runBackground('wpp-reconciliation', reconcileWpp);
+    }, config.WPP_RECONCILE_INTERVAL_MS)
+  : undefined;
+
+const outboxTimer = setInterval(() => {
+  runBackground('outbox-schedule', () => queue.scheduleOutbox());
+}, 5_000);
+
+const followupTimer = setInterval(() => {
+  runBackground('followup-schedule', () => queue.scheduleFollowups());
+}, 10_000);
+
+const retentionTimer = setInterval(() => {
+  runBackground('retention-schedule', () => queue.scheduleQuarantinePurge());
+}, 15 * 60 * 1000);
+
+runBackground('webhook-inbox-drain', drainInbox);
+if (wppReconciliation) runBackground('wpp-reconciliation', reconcileWpp);
+runBackground('outbox-schedule', () => queue.scheduleOutbox());
+runBackground('followup-schedule', () => queue.scheduleFollowups());
+runBackground('retention-schedule', () => queue.scheduleQuarantinePurge());
+
+const shutdown = async () => {
+  clearInterval(inboxTimer);
+  if (wppReconciliationTimer) clearInterval(wppReconciliationTimer);
+  clearInterval(outboxTimer);
+  clearInterval(followupTimer);
+  clearInterval(retentionTimer);
+  await queue.stop();
+  await processingRuntime.pool.end();
+  await privilegedPool.end();
+  process.exit(0);
+};
+
+process.on('SIGTERM', () => void shutdown());
+process.on('SIGINT', () => void shutdown());

@@ -1,0 +1,73 @@
+import type { MessageRepository, PersistFreightResultInput } from '../domain/ports.js';
+import type { FreightEvent, FreightObservation, OutboxEvent, RawMessage } from '../domain/schemas.js';
+
+export class MemoryMessageRepository implements MessageRepository {
+  readonly raw = new Map<string, RawMessage>();
+  readonly observations = new Map<string, FreightObservation>();
+  readonly freightEvents = new Map<string, FreightEvent>();
+  readonly outbox: OutboxEvent[] = [];
+
+  async saveRaw(message: RawMessage): Promise<{ status: 'inserted' | 'duplicate'; eventId: string }> {
+    const key = `${message.tenantId}:${message.provider}:${message.messageId}`;
+    const existing = this.raw.get(key);
+    if (existing) return { status: 'duplicate', eventId: existing.eventId };
+    this.raw.set(key, message);
+    return { status: 'inserted', eventId: message.eventId };
+  }
+
+  async saveObservation(observation: FreightObservation): Promise<void> {
+    if (!this.observations.has(observation.observationId)) {
+      this.observations.set(observation.observationId, observation);
+    }
+  }
+
+  async findFreightEventByFingerprint(tenantId: string, fingerprint: string): Promise<FreightEvent | null> {
+    return this.freightEvents.get(`${tenantId}:${fingerprint}`) ?? null;
+  }
+
+  async saveFreightEvent(event: FreightEvent): Promise<void> {
+    this.freightEvents.set(`${event.tenantId}:${event.fingerprint}`, event);
+  }
+
+  async mergeFreightEvent(
+    tenantId: string,
+    fingerprint: string,
+    merge: (existing: FreightEvent | null) => FreightEvent,
+  ): Promise<FreightEvent> {
+    const key = `${tenantId}:${fingerprint}`;
+    const next = merge(this.freightEvents.get(key) ?? null);
+    this.freightEvents.set(key, next);
+    return next;
+  }
+
+  async persistFreightResult(input: PersistFreightResultInput): Promise<FreightEvent | null> {
+    const eventConfig = input.event;
+    const eventKey = eventConfig
+      ? `${input.observation.tenantId}:${eventConfig.fingerprint}`
+      : null;
+    const existing = eventKey ? this.freightEvents.get(eventKey) ?? null : null;
+    const nextEvent = eventConfig ? eventConfig.merge(existing) : null;
+    const eventOutbox = nextEvent && eventConfig ? eventConfig.outbox(nextEvent) : null;
+
+    if (!this.observations.has(input.observation.observationId)) {
+      this.observations.set(input.observation.observationId, input.observation);
+    }
+    if (!this.outbox.some((item) => item.idempotencyKey === input.observationOutbox.idempotencyKey)) {
+      this.outbox.push(input.observationOutbox);
+    }
+    if (nextEvent && eventKey) {
+      this.freightEvents.set(eventKey, nextEvent);
+    }
+    if (eventOutbox && !this.outbox.some((item) => item.idempotencyKey === eventOutbox.idempotencyKey)) {
+      this.outbox.push(eventOutbox);
+    }
+
+    return nextEvent;
+  }
+
+  async enqueueOutbox(event: OutboxEvent): Promise<void> {
+    if (!this.outbox.some((item) => item.idempotencyKey === event.idempotencyKey)) {
+      this.outbox.push(event);
+    }
+  }
+}

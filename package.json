@@ -1,0 +1,61 @@
+{
+  "name": "whatsapp-ai",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json && node scripts/copy-runtime-assets.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:e2e": "vitest run tests/e2e",
+    "test:security": "vitest run tests/security",
+    "check": "npm run typecheck && npm test",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/src/main.js",
+    "worker": "node dist/src/worker.js",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "format": "biome format --write .",
+    "lint": "biome check .",
+    "bootstrap": "tsx scripts/bootstrap.ts",
+    "data:sync:ibge": "tsx scripts/sync-ibge-municipalities.ts",
+    "lock:prepare": "bash scripts/prepare-lockfile.sh",
+    "security:gate": "bash scripts/security-gate.sh",
+    "release:gate": "bash scripts/release-gate.sh",
+    "db:backup": "bash scripts/backup.sh",
+    "db:restore:rehearsal": "bash scripts/restore-rehearsal.sh",
+    "data:import:entities": "tsx scripts/import-canonical-entities.ts",
+    "data:sync:antt-rntrc": "tsx scripts/sync-antt-rntrc.ts",
+    "model:digest": "tsx scripts/print-model-digest.ts",
+    "test:contract": "vitest run tests/contract",
+    "schema:export": "tsx scripts/export-schemas.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "description": "Secure WhatsApp intelligence and business automation platform with Freight Intelligence for AgroLog MT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "@fastify/helmet": "13.1.1",
+    "@fastify/rate-limit": "11.2.0",
+    "@prometheus-io/client": "0.16.1",
+    "fastify": "5.12.5",
+    "fastify-raw-body": "6.0.1",
+    "file-type": "22.1.1",
+    "mammoth": "1.12.3",
+    "pg": "8.23.0",
+    "pg-boss": "12.35.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "zod": "4.6.5",
+    "yauzl": "3.4.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.0.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "3.0.0"
+  }
+}
