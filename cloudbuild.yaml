@@ -21,18 +21,15 @@ steps:
       - |
         if [[ -f /workspace/cloudbuild-artifacts/generated-package-lock.json ]]; then
           printf '%s\n' "${COMMIT_SHA}" > /workspace/cloudbuild-artifacts/source-commit.txt
-          BUILD_BOOTSTRAP="gs://${PROJECT_ID}-ai-execution-evidence/WHATSAPP_AI/${BUILD_ID}/bootstrap/"
-          COMMIT_BOOTSTRAP="gs://${PROJECT_ID}-ai-execution-evidence/WHATSAPP_AI/bootstrap/by-commit/${COMMIT_SHA}/"
-
           gcloud storage cp /workspace/cloudbuild-artifacts/generated-package-lock.json \
             /workspace/cloudbuild-artifacts/source-commit.txt \
-            "${BUILD_BOOTSTRAP}"
+            "gs://${PROJECT_ID}-ai-execution-evidence/WHATSAPP_AI/${BUILD_ID}/bootstrap/"
 
           # Deterministic retrieval path: the adoption script only accepts an
           # artifact generated from the exact Git commit currently checked out.
           gcloud storage cp /workspace/cloudbuild-artifacts/generated-package-lock.json \
             /workspace/cloudbuild-artifacts/source-commit.txt \
-            "${COMMIT_BOOTSTRAP}"
+            "gs://${PROJECT_ID}-ai-execution-evidence/WHATSAPP_AI/bootstrap/by-commit/${COMMIT_SHA}/"
         fi
 
   - id: deterministic-dependencies
