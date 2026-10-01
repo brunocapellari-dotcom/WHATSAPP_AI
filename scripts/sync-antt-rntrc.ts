@@ -72,13 +72,22 @@ async function fetchJson<T>(url: string): Promise<T> {
 
 function monthReferenceDate(resourceName: string): string | undefined {
   const months: Record<string, string> = {
-    JAN: '01', FEV: '02', MAR: '03', ABR: '04',
-    MAI: '05', JUN: '06', JUL: '07', AGO: '08',
-    SET: '09', OUT: '10', NOV: '11', DEZ: '12',
+    JAN: '01',
+    FEV: '02',
+    MAR: '03',
+    ABR: '04',
+    MAI: '05',
+    JUN: '06',
+    JUL: '07',
+    AGO: '08',
+    SET: '09',
+    OUT: '10',
+    NOV: '11',
+    DEZ: '12',
   };
-  const match = resourceName.toUpperCase().match(
-    /\b(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)(\d{2})\b/,
-  );
+  const match = resourceName
+    .toUpperCase()
+    .match(/\b(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)(\d{2})\b/);
   if (!match) return undefined;
   const month = months[match[1] ?? ''];
   if (!month) return undefined;
@@ -86,11 +95,12 @@ function monthReferenceDate(resourceName: string): string | undefined {
 }
 
 function validResourceId(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-    .test(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-async function discoverLatestResource(): Promise<Required<Pick<CkanResource, 'id' | 'name'>> & CkanResource> {
+async function discoverLatestResource(): Promise<
+  Required<Pick<CkanResource, 'id' | 'name'>> & CkanResource
+> {
   const override = process.env.ANTT_RNTRC_RESOURCE_ID?.trim();
   if (override) {
     if (!validResourceId(override)) throw new Error('invalid_antt_resource_id');
@@ -108,13 +118,14 @@ async function discoverLatestResource(): Promise<Required<Pick<CkanResource, 'id
   if (!payload.success) throw new Error('antt_package_show_failed');
 
   const resources = (payload.result?.resources ?? [])
-    .filter((resource) =>
-      resource.id
-      && resource.name
-      && resource.datastore_active === true
-      && resource.format?.toUpperCase() === 'CSV'
-      && /RNTRC/i.test(resource.name)
-      && /(?:Jan|Fev|Mar|Abr|Mai|Jun|Jul|Ago|Set|Out|Nov|Dez)\d{2}/i.test(resource.name),
+    .filter(
+      (resource) =>
+        resource.id &&
+        resource.name &&
+        resource.datastore_active === true &&
+        resource.format?.toUpperCase() === 'CSV' &&
+        /RNTRC/i.test(resource.name) &&
+        /(?:Jan|Fev|Mar|Abr|Mai|Jun|Jul|Ago|Set|Out|Nov|Dez)\d{2}/i.test(resource.name),
     )
     .sort((a, b) => {
       const aDate = Date.parse(a.last_modified ?? a.created ?? '1970-01-01');
