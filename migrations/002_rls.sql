@@ -9,13 +9,16 @@ BEGIN
 END
 $$;
 
+GRANT USAGE ON SCHEMA public TO whatsapp_ingestor;
+GRANT USAGE ON SCHEMA public TO whatsapp_worker;
+
 GRANT SELECT, INSERT, UPDATE ON whatsapp_raw_events TO whatsapp_ingestor;
 GRANT SELECT, INSERT, UPDATE ON whatsapp_freight_events TO whatsapp_ingestor;
 GRANT SELECT, INSERT ON whatsapp_processed_source_events TO whatsapp_ingestor;
 GRANT SELECT, INSERT ON whatsapp_agrolog_outbox TO whatsapp_ingestor;
+GRANT USAGE, SELECT ON SEQUENCE whatsapp_agrolog_outbox_outbox_id_seq TO whatsapp_ingestor;
 
 GRANT SELECT, UPDATE ON whatsapp_agrolog_outbox TO whatsapp_worker;
-GRANT USAGE, SELECT ON SEQUENCE whatsapp_agrolog_outbox_outbox_id_seq TO whatsapp_ingestor;
 
 ALTER TABLE whatsapp_raw_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE whatsapp_raw_events FORCE ROW LEVEL SECURITY;
