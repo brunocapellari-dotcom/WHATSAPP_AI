@@ -22,6 +22,8 @@ class FreightStore(Protocol):
     def pending_outbox(self, limit: int = 100) -> list[tuple[int, FreightEvent]]: ...
     def mark_outbox_sent(self, outbox_id: int) -> None: ...
     def mark_outbox_failed(self, outbox_id: int, error: str) -> None: ...
+    def readiness_check(self) -> None: ...
+    def outbox_status_counts(self) -> dict[str, int]: ...
 
 
 class InMemoryFreightStore:
@@ -86,6 +88,17 @@ class InMemoryFreightStore:
         self.outbox_attempts[outbox_id] = attempts
         if attempts >= self.max_outbox_attempts:
             self.dead_outbox[outbox_id] = self.outbox.pop(outbox_id)
+
+    def readiness_check(self) -> None:
+        return None
+
+    def outbox_status_counts(self) -> dict[str, int]:
+        return {
+            "PENDING": len(self.outbox),
+            "PROCESSING": 0,
+            "SENT": 0,
+            "DEAD": len(self.dead_outbox),
+        }
 
 
 class RawCipher:
@@ -356,3 +369,36 @@ class PostgresFreightStore:
                     ),
                 )
             conn.commit()
+
+    def readiness_check(self) -> None:
+        if self.worker_mode:
+            raise RuntimeError("ingress readiness cannot use worker credentials")
+        with psycopg.connect(self.database_url, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                self._set_tenant(cur, "__healthcheck__")
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM whatsapp_processed_source_events
+                    WHERE tenant_id=%s
+                    LIMIT 1
+                    """,
+                    ("__healthcheck__",),
+                )
+
+    def outbox_status_counts(self) -> dict[str, int]:
+        self._require_worker()
+        counts = {"PENDING": 0, "PROCESSING": 0, "SENT": 0, "DEAD": 0}
+        with psycopg.connect(self.database_url, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT status, count(*)
+                    FROM whatsapp_agrolog_outbox
+                    GROUP BY status
+                    """
+                )
+                for status, count in cur.fetchall():
+                    if status in counts:
+                        counts[str(status)] = int(count)
+        return counts
