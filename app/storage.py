@@ -19,6 +19,9 @@ class FreightStore(Protocol):
     def find_logical_event(self, tenant_id: str, logical_key: str) -> FreightEvent | None: ...
     def save_event(self, event: FreightEvent, logical_key: str) -> None: ...
     def enqueue_outbox(self, event: FreightEvent) -> None: ...
+    def pending_outbox(self, limit: int = 100) -> list[tuple[int, FreightEvent]]: ...
+    def mark_outbox_sent(self, outbox_id: int) -> None: ...
+    def mark_outbox_failed(self, outbox_id: int, error: str) -> None: ...
 
 
 class InMemoryFreightStore:
@@ -50,6 +53,17 @@ class InMemoryFreightStore:
     def enqueue_outbox(self, event: FreightEvent) -> None:
         if not any(e.event_id == event.event_id and e.version == event.version for e in self.outbox):
             self.outbox.append(event)
+
+    def pending_outbox(self, limit: int = 100) -> list[tuple[int, FreightEvent]]:
+        return list(enumerate(self.outbox[:limit], start=1))
+
+    def mark_outbox_sent(self, outbox_id: int) -> None:
+        index = outbox_id - 1
+        if 0 <= index < len(self.outbox):
+            self.outbox.pop(index)
+
+    def mark_outbox_failed(self, outbox_id: int, error: str) -> None:
+        return None
 
 
 class RawCipher:
@@ -128,6 +142,8 @@ class PostgresFreightStore:
                     attempts integer NOT NULL DEFAULT 0,
                     created_at timestamptz NOT NULL DEFAULT now(),
                     sent_at timestamptz,
+                    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+                    last_error text,
                     UNIQUE (event_id, event_version)
                 );
                 """)
@@ -213,5 +229,50 @@ class PostgresFreightStore:
                     ON CONFLICT (event_id, event_version) DO NOTHING
                     """,
                     (event.tenant_id, event.event_id, event.version, json.dumps(event.model_dump(mode="json"))),
+                )
+            conn.commit()
+
+    def pending_outbox(self, limit: int = 100) -> list[tuple[int, FreightEvent]]:
+        with psycopg.connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT outbox_id, payload
+                    FROM whatsapp_agrolog_outbox
+                    WHERE status='PENDING' AND next_attempt_at <= now()
+                    ORDER BY outbox_id
+                    LIMIT %s
+                    FOR UPDATE SKIP LOCKED
+                    """,
+                    (limit,),
+                )
+                rows = cur.fetchall()
+        return [(int(row[0]), FreightEvent.model_validate(row[1])) for row in rows]
+
+    def mark_outbox_sent(self, outbox_id: int) -> None:
+        with psycopg.connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE whatsapp_agrolog_outbox
+                    SET status='SENT', sent_at=now(), last_error=NULL
+                    WHERE outbox_id=%s
+                    """,
+                    (outbox_id,),
+                )
+            conn.commit()
+
+    def mark_outbox_failed(self, outbox_id: int, error: str) -> None:
+        with psycopg.connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE whatsapp_agrolog_outbox
+                    SET attempts=attempts+1,
+                        last_error=%s,
+                        next_attempt_at=now() + make_interval(secs => LEAST(3600, 30 * power(2, LEAST(attempts, 7))))
+                    WHERE outbox_id=%s
+                    """,
+                    (error[:1000], outbox_id),
                 )
             conn.commit()
