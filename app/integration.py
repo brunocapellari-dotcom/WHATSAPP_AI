@@ -50,3 +50,23 @@ class AgroLogClient:
         )
         response.raise_for_status()
         return response
+
+
+class OutboxDispatcher:
+    def __init__(self, store, client: AgroLogClient) -> None:
+        self.store = store
+        self.client = client
+
+    def flush(self, limit: int = 100) -> dict[str, int]:
+        sent = 0
+        failed = 0
+        for outbox_id, event in self.store.pending_outbox(limit):
+            try:
+                self.client.send(event)
+            except Exception as exc:
+                self.store.mark_outbox_failed(outbox_id, f"{type(exc).__name__}: {exc}")
+                failed += 1
+                continue
+            self.store.mark_outbox_sent(outbox_id)
+            sent += 1
+        return {"sent": sent, "failed": failed}
