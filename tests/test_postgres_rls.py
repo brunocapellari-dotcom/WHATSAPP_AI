@@ -124,7 +124,7 @@ def test_worker_can_dispatch_outbox_but_cannot_read_raw(
     outbox_id, pending_event = pending[0]
     assert pending_event.event_id == event.event_id
 
-    with psycopg.connect(worker_url) as conn:
+    with psycopg.connect(worker_url, autocommit=True) as conn:
         with conn.cursor() as cur:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 cur.execute("SELECT count(*) FROM whatsapp_raw_events")
