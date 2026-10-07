@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whatsapp-ai"
+version = "0.1.0"
+description = "Authorized WhatsApp intelligence pipeline for AgroLog freight events."
+requires-python = ">=3.12"
+dependencies = [
+  "cryptography>=45,<47",
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "psycopg[binary]>=3.2,<4",
+  "pydantic>=2.11,<3",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.4,<10",
+  "pytest-asyncio>=1.1,<2",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
