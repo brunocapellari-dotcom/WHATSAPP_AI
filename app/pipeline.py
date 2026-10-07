@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from decimal import Decimal
+from dataclasses import dataclass
 
 from .models import FreightClassification, FreightEvent, IngestionResult, RawInboundEvent, TruthClassification
-from .parser import EntityResolver, normalize_text, parse_freight
+from .parser import EntityResolver, ParsedFreight, normalize_text, parse_freight
 from .storage import FreightStore
 
 
@@ -30,6 +30,95 @@ def _semantic_signature(event: FreightEvent) -> str:
         },
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def _company(event: FreightEvent):
+    values = event.entities.get("company", [])
+    return values[0] if values else None
+
+
+@dataclass(frozen=True)
+class MatchContext:
+    logical_key: str
+    event: FreightEvent
+    method: str
+    score: int
+
+
+def _mutation_candidate_score(
+    parsed: ParsedFreight,
+    origin,
+    destination,
+    company,
+    candidate: FreightEvent,
+) -> int | None:
+    score = 0
+    candidate_company = _company(candidate)
+
+    comparisons = [
+        (parsed.product, candidate.product, 3),
+        (
+            origin.normalized_value if origin else None,
+            candidate.origin.normalized_value if candidate.origin else None,
+            3,
+        ),
+        (
+            destination.normalized_value if destination else None,
+            candidate.destination.normalized_value if candidate.destination else None,
+            3,
+        ),
+        (
+            company.normalized_value if company else None,
+            candidate_company.normalized_value if candidate_company else None,
+            2,
+        ),
+        (parsed.phone, candidate.metadata.get("phone"), 2),
+        (parsed.date_text, candidate.metadata.get("date_text"), 1),
+    ]
+    for incoming, existing, weight in comparisons:
+        if incoming is None or existing is None:
+            continue
+        if normalize_text(str(incoming)) != normalize_text(str(existing)):
+            return None
+        score += weight
+
+    if parsed.rate is not None and candidate.rate is not None and parsed.rate == candidate.rate:
+        score += 1
+    return score
+
+
+def _find_mutation_target(
+    store: FreightStore,
+    tenant_id: str,
+    parsed: ParsedFreight,
+    origin,
+    destination,
+    company,
+    raw: RawInboundEvent,
+) -> MatchContext | None:
+    candidates = store.recent_events(tenant_id, limit=100)
+    reply_to = raw.metadata.get("reply_to_source_event_id")
+    if isinstance(reply_to, str) and reply_to:
+        for logical_key, event in candidates:
+            if reply_to not in event.source_event_ids:
+                continue
+            score = _mutation_candidate_score(parsed, origin, destination, company, event)
+            if score is not None:
+                return MatchContext(logical_key, event, "reply_source_event", score)
+
+    ranked: list[MatchContext] = []
+    for logical_key, event in candidates:
+        score = _mutation_candidate_score(parsed, origin, destination, company, event)
+        if score is None or score < 6:
+            continue
+        ranked.append(MatchContext(logical_key, event, "field_match", score))
+
+    ranked.sort(key=lambda item: (item.score, item.event.timestamp), reverse=True)
+    if not ranked:
+        return None
+    if len(ranked) > 1 and ranked[0].score == ranked[1].score:
+        return None
+    return ranked[0]
 
 
 class FreightPipeline:
@@ -62,29 +151,115 @@ class FreightPipeline:
 
         origin = self.resolver.resolve("municipality", parsed.origin_raw)
         destination = self.resolver.resolve("municipality", parsed.destination_raw)
-        entities: dict[str, list] = {}
         company = self.resolver.resolve("company", parsed.company_raw)
+
+        if parsed.classification in {
+            FreightClassification.FREIGHT_OFFER,
+            FreightClassification.FREIGHT_REQUEST,
+        } and (parsed.product is None or origin is None or destination is None):
+            self.store.mark_source_event(tenant_id, provider, raw.source_event_id)
+            return IngestionResult(
+                status="QUALITY_REJECTED",
+                classification=parsed.classification,
+                reason="product, origin and destination are required before canonical publication",
+            )
+
+        entities: dict[str, list] = {}
         if company:
             entities["company"] = [company]
 
-        key = _logical_key([
-            parsed.product,
-            origin.normalized_value if origin else None,
-            destination.normalized_value if destination else None,
-            company.normalized_value if company else None,
-            parsed.date_text,
-        ])
+        key = _logical_key(
+            [
+                parsed.product,
+                origin.normalized_value if origin else None,
+                destination.normalized_value if destination else None,
+                company.normalized_value if company else None,
+                parsed.date_text,
+            ]
+        )
         previous = self.store.find_logical_event(tenant_id, key)
+        match_method = "logical_key" if previous else None
+        match_score: int | None = None
+
+        if previous is None and parsed.classification in {
+            FreightClassification.UPDATE,
+            FreightClassification.CANCELLATION,
+        }:
+            matched = _find_mutation_target(
+                self.store,
+                tenant_id,
+                parsed,
+                origin,
+                destination,
+                company,
+                raw,
+            )
+            if matched is None:
+                self.store.mark_source_event(tenant_id, provider, raw.source_event_id)
+                return IngestionResult(
+                    status="UNMATCHED_MUTATION",
+                    classification=parsed.classification,
+                    reason="update/cancellation could not be linked unambiguously to a prior freight event",
+                )
+            key = matched.logical_key
+            previous = matched.event
+            match_method = matched.method
+            match_score = matched.score
+
+        carried_forward_fields: list[str] = []
+        if previous:
+            if parsed.product is None:
+                parsed_product = previous.product
+                carried_forward_fields.append("product")
+            else:
+                parsed_product = parsed.product
+            if origin is None:
+                origin = previous.origin
+                carried_forward_fields.append("origin")
+            if destination is None:
+                destination = previous.destination
+                carried_forward_fields.append("destination")
+            if company is None:
+                company = _company(previous)
+                if company:
+                    entities["company"] = [company]
+                    carried_forward_fields.append("company")
+            if parsed.rate is None and parsed.classification == FreightClassification.CANCELLATION:
+                event_rate = previous.rate
+                event_rate_unit = previous.rate_unit
+                carried_forward_fields.extend(["rate", "rate_unit"])
+            else:
+                event_rate = parsed.rate
+                event_rate_unit = parsed.rate_unit or previous.rate_unit
+            if parsed.date_text is None and previous.metadata.get("date_text"):
+                date_text = previous.metadata.get("date_text")
+                carried_forward_fields.append("date_text")
+            else:
+                date_text = parsed.date_text
+            if parsed.phone is None and previous.metadata.get("phone"):
+                phone = previous.metadata.get("phone")
+                carried_forward_fields.append("phone")
+            else:
+                phone = parsed.phone
+        else:
+            parsed_product = parsed.product
+            event_rate = parsed.rate
+            event_rate_unit = parsed.rate_unit
+            date_text = parsed.date_text
+            phone = parsed.phone
 
         metadata = {
-            "phone": parsed.phone,
-            "date_text": parsed.date_text,
+            "phone": phone,
+            "date_text": date_text,
             "tonnage": str(parsed.tonnage) if parsed.tonnage is not None else None,
             "vacancies": parsed.vacancies,
             "links": parsed.links,
             "provider": provider,
             "source": raw.source,
             "attachment_count": len(raw.attachments),
+            "mutation_match_method": match_method,
+            "mutation_match_score": match_score,
+            "carried_forward_fields": sorted(set(carried_forward_fields)),
         }
 
         classification = parsed.classification
@@ -95,7 +270,7 @@ class FreightPipeline:
             event_id = previous.event_id
             version = previous.version
             source_ids = [*previous.source_event_ids, raw.source_event_id]
-            if classification == FreightClassification.FREIGHT_OFFER and previous.rate != parsed.rate:
+            if classification == FreightClassification.FREIGHT_OFFER and previous.rate != event_rate:
                 classification = FreightClassification.UPDATE
 
         event = FreightEvent(
@@ -106,12 +281,12 @@ class FreightPipeline:
             source_event_ids=source_ids,
             raw_reference=raw_reference,
             timestamp=raw.message_timestamp,
-            product=parsed.product,
+            product=parsed_product,
             origin=origin,
             destination=destination,
             entities=entities,
-            rate=parsed.rate,
-            rate_unit=parsed.rate_unit,
+            rate=event_rate,
+            rate_unit=event_rate_unit,
             metadata=metadata,
             confidence=parsed.confidence,
             truth_classification=TruthClassification.OBSERVED,
@@ -120,6 +295,9 @@ class FreightPipeline:
                 "source": raw.source,
                 "source_event_id": raw.source_event_id,
                 "message_timestamp": raw.message_timestamp.isoformat(),
+                "mutation_match_method": match_method,
+                "mutation_match_score": match_score,
+                "carried_forward_fields": sorted(set(carried_forward_fields)),
             },
         )
 
