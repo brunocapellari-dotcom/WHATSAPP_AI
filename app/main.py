@@ -26,9 +26,7 @@ app = FastAPI(
 
 
 def _store() -> PostgresFreightStore:
-    store = PostgresFreightStore.from_env()
-    store.ensure_schema()
-    return store
+    return PostgresFreightStore.from_env()
 
 
 def _validate_attachments(event: RawInboundEvent) -> None:
