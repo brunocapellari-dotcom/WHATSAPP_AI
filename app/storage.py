@@ -4,9 +4,9 @@ import json
 import os
 from typing import Protocol
 
-import psycopg
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from .database import DatabaseConnector
 from .models import FreightEvent, RawInboundEvent
 from .security import sha256_hex
 
@@ -124,7 +124,7 @@ class RawCipher:
 class PostgresFreightStore:
     def __init__(
         self,
-        database_url: str,
+        database_url: str | DatabaseConnector,
         cipher: RawCipher,
         *,
         worker_mode: bool = False,
@@ -135,7 +135,11 @@ class PostgresFreightStore:
             raise ValueError("max_outbox_attempts must be between 1 and 100")
         if not 30 <= claim_timeout_seconds <= 3600:
             raise ValueError("claim_timeout_seconds must be between 30 and 3600")
-        self.database_url = database_url
+        self.db = (
+            database_url
+            if isinstance(database_url, DatabaseConnector)
+            else DatabaseConnector(database_url=database_url)
+        )
         self.cipher = cipher
         self.worker_mode = worker_mode
         self.max_outbox_attempts = max_outbox_attempts
@@ -143,12 +147,9 @@ class PostgresFreightStore:
 
     @classmethod
     def from_env(cls, *, worker: bool = False) -> "PostgresFreightStore":
-        env_name = "DATABASE_URL_WORKER" if worker else "DATABASE_URL"
-        url = os.environ.get(env_name)
-        if not url:
-            raise RuntimeError(f"{env_name} is required")
+        role = "worker" if worker else "ingress"
         return cls(
-            url,
+            DatabaseConnector.from_env(role),
             RawCipher.from_env(),
             worker_mode=worker,
             max_outbox_attempts=int(os.environ.get("OUTBOX_MAX_ATTEMPTS", "8")),
@@ -170,7 +171,7 @@ class PostgresFreightStore:
         digest = sha256_hex(raw)
         aad = f"{tenant_id}:{provider}:{event.source_event_id}".encode("utf-8")
         nonce, ciphertext = self.cipher.encrypt(raw, aad)
-        with psycopg.connect(self.database_url) as conn:
+        with self.db.connection() as conn:
             with conn.cursor() as cur:
                 self._set_tenant(cur, tenant_id)
                 cur.execute(
@@ -196,7 +197,7 @@ class PostgresFreightStore:
         return f"postgres://whatsapp_raw_events/{tenant_id}/{provider}/{event.source_event_id}"
 
     def has_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> bool:
-        with psycopg.connect(self.database_url) as conn:
+        with self.db.connection() as conn:
             with conn.cursor() as cur:
                 self._set_tenant(cur, tenant_id)
                 cur.execute(
@@ -206,7 +207,7 @@ class PostgresFreightStore:
                 return cur.fetchone() is not None
 
     def mark_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> None:
-        with psycopg.connect(self.database_url) as conn:
+        with self.db.connection() as conn:
             with conn.cursor() as cur:
                 self._set_tenant(cur, tenant_id)
                 cur.execute(
@@ -219,7 +220,7 @@ class PostgresFreightStore:
             conn.commit()
 
     def find_logical_event(self, tenant_id: str, logical_key: str) -> FreightEvent | None:
-        with psycopg.connect(self.database_url) as conn:
+        with self.db.connection() as conn:
             with conn.cursor() as cur:
                 self._set_tenant(cur, tenant_id)
                 cur.execute(
@@ -231,7 +232,7 @@ class PostgresFreightStore:
 
     def recent_events(self, tenant_id: str, limit: int = 100) -> list[tuple[str, FreightEvent]]:
         limit = max(1, min(limit, 500))
-        with psycopg.connect(self.database_url) as conn:
+        with self.db.connection() as conn:
             with conn.cursor() as cur:
                 self._set_tenant(cur, tenant_id)
                 cur.execute(
@@ -249,7 +250,7 @@ class PostgresFreightStore:
 
     def save_event(self, event: FreightEvent, logical_key: str) -> None:
         payload = event.model_dump(mode="json")
-        with psycopg.connect(self.database_url) as conn:
+        with self.db.connection() as conn:
             with conn.cursor() as cur:
                 self._set_tenant(cur, event.tenant_id)
                 cur.execute(
@@ -270,7 +271,7 @@ class PostgresFreightStore:
             conn.commit()
 
     def enqueue_outbox(self, event: FreightEvent) -> None:
-        with psycopg.connect(self.database_url) as conn:
+        with self.db.connection() as conn:
             with conn.cursor() as cur:
                 self._set_tenant(cur, event.tenant_id)
                 cur.execute(
@@ -291,7 +292,7 @@ class PostgresFreightStore:
 
     def pending_outbox(self, limit: int = 100) -> list[tuple[int, FreightEvent]]:
         self._require_worker()
-        with psycopg.connect(self.database_url) as conn:
+        with self.db.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -322,7 +323,7 @@ class PostgresFreightStore:
 
     def mark_outbox_sent(self, outbox_id: int) -> None:
         self._require_worker()
-        with psycopg.connect(self.database_url) as conn:
+        with self.db.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -336,7 +337,7 @@ class PostgresFreightStore:
 
     def mark_outbox_failed(self, outbox_id: int, error: str) -> None:
         self._require_worker()
-        with psycopg.connect(self.database_url) as conn:
+        with self.db.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -373,7 +374,7 @@ class PostgresFreightStore:
     def readiness_check(self) -> None:
         if self.worker_mode:
             raise RuntimeError("ingress readiness cannot use worker credentials")
-        with psycopg.connect(self.database_url, connect_timeout=5) as conn:
+        with self.db.connection(timeout_seconds=5) as conn:
             with conn.cursor() as cur:
                 self._set_tenant(cur, "__healthcheck__")
                 cur.execute(
@@ -389,7 +390,7 @@ class PostgresFreightStore:
     def outbox_status_counts(self) -> dict[str, int]:
         self._require_worker()
         counts = {"PENDING": 0, "PROCESSING": 0, "SENT": 0, "DEAD": 0}
-        with psycopg.connect(self.database_url, connect_timeout=5) as conn:
+        with self.db.connection(timeout_seconds=5) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
