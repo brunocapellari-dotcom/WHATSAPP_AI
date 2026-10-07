@@ -8,11 +8,13 @@ version = "0.1.0"
 description = "Authorized WhatsApp intelligence pipeline for AgroLog freight events."
 requires-python = ">=3.12"
 dependencies = [
+  "cloud-sql-python-connector[pg8000]>=1.18,<2",
   "cryptography>=45,<47",
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
   "psycopg[binary]>=3.2,<4",
   "pydantic>=2.11,<3",
+  "sqlparse>=0.5,<1",
   "uvicorn[standard]>=0.35,<1",
 ]
 
