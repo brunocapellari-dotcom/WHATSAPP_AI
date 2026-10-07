@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import UTC, datetime
 from typing import Protocol
 
 import psycopg
@@ -17,6 +16,7 @@ class FreightStore(Protocol):
     def has_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> bool: ...
     def mark_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> None: ...
     def find_logical_event(self, tenant_id: str, logical_key: str) -> FreightEvent | None: ...
+    def recent_events(self, tenant_id: str, limit: int = 100) -> list[tuple[str, FreightEvent]]: ...
     def save_event(self, event: FreightEvent, logical_key: str) -> None: ...
     def enqueue_outbox(self, event: FreightEvent) -> None: ...
     def pending_outbox(self, limit: int = 100) -> list[tuple[int, FreightEvent]]: ...
@@ -27,11 +27,15 @@ class FreightStore(Protocol):
 class InMemoryFreightStore:
     """Test-only store. Production must use PostgresFreightStore."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_outbox_attempts: int = 8) -> None:
         self.raw: list[dict] = []
         self.source_ids: set[tuple[str, str, str]] = set()
         self.events: dict[tuple[str, str], FreightEvent] = {}
-        self.outbox: list[FreightEvent] = []
+        self.outbox: dict[int, FreightEvent] = {}
+        self.dead_outbox: dict[int, FreightEvent] = {}
+        self.outbox_attempts: dict[int, int] = {}
+        self._next_outbox_id = 1
+        self.max_outbox_attempts = max_outbox_attempts
 
     def save_raw(self, tenant_id: str, provider: str, event: RawInboundEvent) -> str:
         ref = f"memory://raw/{tenant_id}/{provider}/{event.source_event_id}"
@@ -47,23 +51,41 @@ class InMemoryFreightStore:
     def find_logical_event(self, tenant_id: str, logical_key: str) -> FreightEvent | None:
         return self.events.get((tenant_id, logical_key))
 
+    def recent_events(self, tenant_id: str, limit: int = 100) -> list[tuple[str, FreightEvent]]:
+        rows = [
+            (logical_key, event)
+            for (event_tenant, logical_key), event in self.events.items()
+            if event_tenant == tenant_id
+        ]
+        rows.sort(key=lambda item: item[1].timestamp, reverse=True)
+        return rows[:limit]
+
     def save_event(self, event: FreightEvent, logical_key: str) -> None:
         self.events[(event.tenant_id, logical_key)] = event
 
     def enqueue_outbox(self, event: FreightEvent) -> None:
-        if not any(e.event_id == event.event_id and e.version == event.version for e in self.outbox):
-            self.outbox.append(event)
+        all_events = [*self.outbox.values(), *self.dead_outbox.values()]
+        if any(e.event_id == event.event_id and e.version == event.version for e in all_events):
+            return
+        outbox_id = self._next_outbox_id
+        self._next_outbox_id += 1
+        self.outbox[outbox_id] = event
+        self.outbox_attempts[outbox_id] = 0
 
     def pending_outbox(self, limit: int = 100) -> list[tuple[int, FreightEvent]]:
-        return list(enumerate(self.outbox[:limit], start=1))
+        return sorted(self.outbox.items())[:limit]
 
     def mark_outbox_sent(self, outbox_id: int) -> None:
-        index = outbox_id - 1
-        if 0 <= index < len(self.outbox):
-            self.outbox.pop(index)
+        self.outbox.pop(outbox_id, None)
+        self.outbox_attempts.pop(outbox_id, None)
 
     def mark_outbox_failed(self, outbox_id: int, error: str) -> None:
-        return None
+        if outbox_id not in self.outbox:
+            return
+        attempts = self.outbox_attempts.get(outbox_id, 0) + 1
+        self.outbox_attempts[outbox_id] = attempts
+        if attempts >= self.max_outbox_attempts:
+            self.dead_outbox[outbox_id] = self.outbox.pop(outbox_id)
 
 
 class RawCipher:
@@ -87,66 +109,92 @@ class RawCipher:
 
 
 class PostgresFreightStore:
-    def __init__(self, database_url: str, cipher: RawCipher) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        cipher: RawCipher,
+        *,
+        max_outbox_attempts: int = 8,
+        claim_timeout_seconds: int = 300,
+    ) -> None:
+        if not 1 <= max_outbox_attempts <= 100:
+            raise ValueError("max_outbox_attempts must be between 1 and 100")
+        if not 30 <= claim_timeout_seconds <= 3600:
+            raise ValueError("claim_timeout_seconds must be between 30 and 3600")
         self.database_url = database_url
         self.cipher = cipher
+        self.max_outbox_attempts = max_outbox_attempts
+        self.claim_timeout_seconds = claim_timeout_seconds
 
     @classmethod
     def from_env(cls) -> "PostgresFreightStore":
         url = os.environ.get("DATABASE_URL")
         if not url:
             raise RuntimeError("DATABASE_URL is required")
-        return cls(url, RawCipher.from_env())
+        return cls(
+            url,
+            RawCipher.from_env(),
+            max_outbox_attempts=int(os.environ.get("OUTBOX_MAX_ATTEMPTS", "8")),
+            claim_timeout_seconds=int(os.environ.get("OUTBOX_CLAIM_TIMEOUT_SECONDS", "300")),
+        )
 
     def ensure_schema(self) -> None:
         with psycopg.connect(self.database_url) as conn:
             with conn.cursor() as cur:
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS whatsapp_raw_events (
-                    tenant_id text NOT NULL,
-                    provider text NOT NULL,
-                    source_event_id text NOT NULL,
-                    source text NOT NULL,
-                    message_timestamp timestamptz NOT NULL,
-                    ingestion_timestamp timestamptz NOT NULL DEFAULT now(),
-                    payload_hash text NOT NULL,
-                    nonce bytea NOT NULL,
-                    ciphertext bytea NOT NULL,
-                    attachment_metadata jsonb NOT NULL DEFAULT '[]'::jsonb,
-                    PRIMARY KEY (tenant_id, provider, source_event_id)
-                );
-                CREATE TABLE IF NOT EXISTS whatsapp_freight_events (
-                    tenant_id text NOT NULL,
-                    logical_key text NOT NULL,
-                    event_id uuid NOT NULL,
-                    version integer NOT NULL,
-                    payload jsonb NOT NULL,
-                    updated_at timestamptz NOT NULL DEFAULT now(),
-                    PRIMARY KEY (tenant_id, logical_key),
-                    UNIQUE (event_id)
-                );
-                CREATE TABLE IF NOT EXISTS whatsapp_processed_source_events (
-                    tenant_id text NOT NULL,
-                    provider text NOT NULL,
-                    source_event_id text NOT NULL,
-                    processed_at timestamptz NOT NULL DEFAULT now(),
-                    PRIMARY KEY (tenant_id, provider, source_event_id)
-                );
-                CREATE TABLE IF NOT EXISTS whatsapp_agrolog_outbox (
-                    outbox_id bigserial PRIMARY KEY,
-                    tenant_id text NOT NULL,
-                    event_id uuid NOT NULL,
-                    event_version integer NOT NULL,
-                    payload jsonb NOT NULL,
-                    status text NOT NULL DEFAULT 'PENDING',
-                    attempts integer NOT NULL DEFAULT 0,
-                    created_at timestamptz NOT NULL DEFAULT now(),
-                    sent_at timestamptz,
-                    next_attempt_at timestamptz NOT NULL DEFAULT now(),
-                    last_error text,
-                    UNIQUE (event_id, event_version)
-                );
-                """)
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whatsapp_raw_events (
+                        tenant_id text NOT NULL,
+                        provider text NOT NULL,
+                        source_event_id text NOT NULL,
+                        source text NOT NULL,
+                        message_timestamp timestamptz NOT NULL,
+                        ingestion_timestamp timestamptz NOT NULL DEFAULT now(),
+                        payload_hash text NOT NULL,
+                        nonce bytea NOT NULL,
+                        ciphertext bytea NOT NULL,
+                        attachment_metadata jsonb NOT NULL DEFAULT '[]'::jsonb,
+                        PRIMARY KEY (tenant_id, provider, source_event_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS whatsapp_freight_events (
+                        tenant_id text NOT NULL,
+                        logical_key text NOT NULL,
+                        event_id uuid NOT NULL,
+                        version integer NOT NULL,
+                        payload jsonb NOT NULL,
+                        updated_at timestamptz NOT NULL DEFAULT now(),
+                        PRIMARY KEY (tenant_id, logical_key),
+                        UNIQUE (event_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS whatsapp_processed_source_events (
+                        tenant_id text NOT NULL,
+                        provider text NOT NULL,
+                        source_event_id text NOT NULL,
+                        processed_at timestamptz NOT NULL DEFAULT now(),
+                        PRIMARY KEY (tenant_id, provider, source_event_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS whatsapp_agrolog_outbox (
+                        outbox_id bigserial PRIMARY KEY,
+                        tenant_id text NOT NULL,
+                        event_id uuid NOT NULL,
+                        event_version integer NOT NULL,
+                        payload jsonb NOT NULL,
+                        status text NOT NULL DEFAULT 'PENDING',
+                        attempts integer NOT NULL DEFAULT 0,
+                        created_at timestamptz NOT NULL DEFAULT now(),
+                        sent_at timestamptz,
+                        next_attempt_at timestamptz NOT NULL DEFAULT now(),
+                        processing_started_at timestamptz,
+                        dead_at timestamptz,
+                        last_error text,
+                        UNIQUE (event_id, event_version)
+                    );
+                    ALTER TABLE whatsapp_agrolog_outbox
+                        ADD COLUMN IF NOT EXISTS processing_started_at timestamptz;
+                    ALTER TABLE whatsapp_agrolog_outbox
+                        ADD COLUMN IF NOT EXISTS dead_at timestamptz;
+                    """
+                )
             conn.commit()
 
     def save_raw(self, tenant_id: str, provider: str, event: RawInboundEvent) -> str:
@@ -164,8 +212,14 @@ class PostgresFreightStore:
                     ON CONFLICT (tenant_id, provider, source_event_id) DO NOTHING
                     """,
                     (
-                        tenant_id, provider, event.source_event_id, event.source,
-                        event.message_timestamp, digest, nonce, ciphertext,
+                        tenant_id,
+                        provider,
+                        event.source_event_id,
+                        event.source,
+                        event.message_timestamp,
+                        digest,
+                        nonce,
+                        ciphertext,
                         json.dumps([a.model_dump(mode="json") for a in event.attachments]),
                     ),
                 )
@@ -202,6 +256,23 @@ class PostgresFreightStore:
                 )
                 row = cur.fetchone()
         return FreightEvent.model_validate(row[0]) if row else None
+
+    def recent_events(self, tenant_id: str, limit: int = 100) -> list[tuple[str, FreightEvent]]:
+        limit = max(1, min(limit, 500))
+        with psycopg.connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT logical_key, payload
+                    FROM whatsapp_freight_events
+                    WHERE tenant_id=%s
+                    ORDER BY updated_at DESC
+                    LIMIT %s
+                    """,
+                    (tenant_id, limit),
+                )
+                rows = cur.fetchall()
+        return [(str(row[0]), FreightEvent.model_validate(row[1])) for row in rows]
 
     def save_event(self, event: FreightEvent, logical_key: str) -> None:
         payload = event.model_dump(mode="json")
@@ -240,20 +311,26 @@ class PostgresFreightStore:
                     WITH claimed AS (
                         SELECT outbox_id
                         FROM whatsapp_agrolog_outbox
-                        WHERE status='PENDING' AND next_attempt_at <= now()
+                        WHERE
+                            (status='PENDING' AND next_attempt_at <= now())
+                            OR (
+                                status='PROCESSING'
+                                AND processing_started_at < now() - make_interval(secs => %s)
+                            )
                         ORDER BY outbox_id
                         LIMIT %s
                         FOR UPDATE SKIP LOCKED
                     )
                     UPDATE whatsapp_agrolog_outbox AS o
-                    SET status='PROCESSING'
+                    SET status='PROCESSING', processing_started_at=now()
                     FROM claimed
                     WHERE o.outbox_id = claimed.outbox_id
                     RETURNING o.outbox_id, o.payload
                     """,
-                    (limit,),
+                    (self.claim_timeout_seconds, limit),
                 )
                 rows = cur.fetchall()
+            conn.commit()
         return [(int(row[0]), FreightEvent.model_validate(row[1])) for row in rows]
 
     def mark_outbox_sent(self, outbox_id: int) -> None:
@@ -262,7 +339,7 @@ class PostgresFreightStore:
                 cur.execute(
                     """
                     UPDATE whatsapp_agrolog_outbox
-                    SET status='SENT', sent_at=now(), last_error=NULL
+                    SET status='SENT', sent_at=now(), last_error=NULL, processing_started_at=NULL
                     WHERE outbox_id=%s
                     """,
                     (outbox_id,),
@@ -275,14 +352,31 @@ class PostgresFreightStore:
                 cur.execute(
                     """
                     UPDATE whatsapp_agrolog_outbox
-                    SET status='PENDING',
-                        attempts=attempts+1,
+                    SET attempts=attempts+1,
+                        status=CASE
+                            WHEN attempts+1 >= %s THEN 'DEAD'
+                            ELSE 'PENDING'
+                        END,
+                        dead_at=CASE
+                            WHEN attempts+1 >= %s THEN now()
+                            ELSE NULL
+                        END,
                         last_error=%s,
-                        next_attempt_at=now() + make_interval(
-                            secs => LEAST(3600, 30 * power(2, LEAST(attempts, 7)))
-                        )
+                        processing_started_at=NULL,
+                        next_attempt_at=CASE
+                            WHEN attempts+1 >= %s THEN next_attempt_at
+                            ELSE now() + make_interval(
+                                secs => LEAST(3600, 30 * power(2, LEAST(attempts, 7)))
+                            )
+                        END
                     WHERE outbox_id=%s
                     """,
-                    (error[:1000], outbox_id),
+                    (
+                        self.max_outbox_attempts,
+                        self.max_outbox_attempts,
+                        error[:1000],
+                        self.max_outbox_attempts,
+                        outbox_id,
+                    ),
                 )
             conn.commit()
