@@ -129,4 +129,19 @@ def test_worker_can_dispatch_outbox_but_cannot_read_raw(
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 cur.execute("SELECT count(*) FROM whatsapp_raw_events")
 
+    counts = worker.outbox_status_counts()
+    assert counts["PROCESSING"] == 1
+    assert counts["DEAD"] == 0
+
     worker.mark_outbox_sent(outbox_id)
+    counts = worker.outbox_status_counts()
+    assert counts["PROCESSING"] == 0
+    assert counts["SENT"] >= 1
+
+
+def test_ingress_readiness_uses_rls_scoped_table_access(
+    database_roles: tuple[str, str],
+) -> None:
+    ingestor_url, _ = database_roles
+    store = PostgresFreightStore(ingestor_url, RawCipher(b"2" * 32))
+    store.readiness_check()
