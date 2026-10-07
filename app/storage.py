@@ -237,12 +237,19 @@ class PostgresFreightStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT outbox_id, payload
-                    FROM whatsapp_agrolog_outbox
-                    WHERE status='PENDING' AND next_attempt_at <= now()
-                    ORDER BY outbox_id
-                    LIMIT %s
-                    FOR UPDATE SKIP LOCKED
+                    WITH claimed AS (
+                        SELECT outbox_id
+                        FROM whatsapp_agrolog_outbox
+                        WHERE status='PENDING' AND next_attempt_at <= now()
+                        ORDER BY outbox_id
+                        LIMIT %s
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    UPDATE whatsapp_agrolog_outbox AS o
+                    SET status='PROCESSING'
+                    FROM claimed
+                    WHERE o.outbox_id = claimed.outbox_id
+                    RETURNING o.outbox_id, o.payload
                     """,
                     (limit,),
                 )
@@ -268,9 +275,12 @@ class PostgresFreightStore:
                 cur.execute(
                     """
                     UPDATE whatsapp_agrolog_outbox
-                    SET attempts=attempts+1,
+                    SET status='PENDING',
+                        attempts=attempts+1,
                         last_error=%s,
-                        next_attempt_at=now() + make_interval(secs => LEAST(3600, 30 * power(2, LEAST(attempts, 7))))
+                        next_attempt_at=now() + make_interval(
+                            secs => LEAST(3600, 30 * power(2, LEAST(attempts, 7)))
+                        )
                     WHERE outbox_id=%s
                     """,
                     (error[:1000], outbox_id),
