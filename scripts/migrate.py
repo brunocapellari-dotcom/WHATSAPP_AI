@@ -1,21 +1,35 @@
 from __future__ import annotations
 
 import hashlib
-import os
 from pathlib import Path
 
-import psycopg
+import sqlparse
+
+from app.database import DatabaseConnector
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 
 
-def apply_migrations(database_url: str, migrations_dir: Path = MIGRATIONS_DIR) -> list[str]:
+def _statements(sql: str) -> list[str]:
+    return [statement.strip() for statement in sqlparse.split(sql) if statement.strip()]
+
+
+def apply_migrations(
+    database: str | DatabaseConnector,
+    migrations_dir: Path = MIGRATIONS_DIR,
+) -> list[str]:
     applied: list[str] = []
     paths = sorted(migrations_dir.glob("*.sql"))
     if not paths:
         raise RuntimeError("no database migrations found")
 
-    with psycopg.connect(database_url) as conn:
+    db = (
+        database
+        if isinstance(database, DatabaseConnector)
+        else DatabaseConnector(database_url=database)
+    )
+
+    with db.connection(timeout_seconds=30) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -44,7 +58,8 @@ def apply_migrations(database_url: str, migrations_dir: Path = MIGRATIONS_DIR) -
                         raise RuntimeError(f"migration checksum mismatch: {version}")
                     continue
 
-                cur.execute(sql)
+                for statement in _statements(sql):
+                    cur.execute(statement)
                 cur.execute(
                     """
                     INSERT INTO whatsapp_schema_migrations (version, checksum)
@@ -59,10 +74,8 @@ def apply_migrations(database_url: str, migrations_dir: Path = MIGRATIONS_DIR) -
 
 
 def main() -> int:
-    database_url = os.environ.get("DATABASE_URL_MIGRATOR")
-    if not database_url:
-        raise RuntimeError("DATABASE_URL_MIGRATOR is required")
-    applied = apply_migrations(database_url)
+    db = DatabaseConnector.from_env("migrator")
+    applied = apply_migrations(db)
     for version in applied:
         print(f"applied migration {version}")
     if not applied:
