@@ -26,3 +26,8 @@ test = [
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q"
+
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["migrations*", "scripts*", "tests*"]
