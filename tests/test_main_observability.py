@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-import app.main as main
+from app import main
 
 
 class ReadyStore:
