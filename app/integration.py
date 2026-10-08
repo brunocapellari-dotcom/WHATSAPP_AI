@@ -8,11 +8,16 @@ import time
 from dataclasses import dataclass
 
 import httpx
+from google.auth.exceptions import GoogleAuthError
 from google.auth.transport.requests import Request
 from google.oauth2 import id_token
 
 from .models import FreightEvent
-from .security import validate_egress_url, validate_oidc_audience
+from .security import SecurityError, validate_egress_url, validate_oidc_audience
+
+
+class DeliveryError(RuntimeError):
+    """Retryable or terminal delivery failure at the AgroLog boundary."""
 
 
 def _fetch_identity_token(audience: str) -> str:
@@ -28,16 +33,24 @@ class AgroLogClient:
     timeout_seconds: float = 10.0
 
     @classmethod
-    def from_env(cls) -> "AgroLogClient":
+    def from_env(cls) -> AgroLogClient:
         endpoint = os.environ["AGROLOG_FREIGHT_INGEST_URL"]
         secret = os.environ["AGROLOG_SHARED_SECRET"]
         hosts = {item.strip() for item in os.environ.get("AGROLOG_EGRESS_ALLOWED_HOSTS", "").split(",") if item.strip()}
         validate_egress_url(endpoint, hosts)
-        return cls(endpoint=endpoint, shared_secret=secret, allowed_hosts=hosts)
+        audience = os.environ.get("AGROLOG_OIDC_AUDIENCE")
+        if audience:
+            audience = validate_oidc_audience(endpoint, audience)
+        return cls(
+            endpoint=endpoint,
+            shared_secret=secret,
+            allowed_hosts=hosts,
+            oidc_audience=audience,
+        )
 
     def send(self, event: FreightEvent) -> httpx.Response:
         validate_egress_url(self.endpoint, self.allowed_hosts)
-        body = json.dumps(event.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        body = json.dumps(event.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
         timestamp = str(int(time.time()))
         signature = hmac.new(
             self.shared_secret.encode("utf-8"),
@@ -50,17 +63,20 @@ class AgroLogClient:
             "x-agrolog-signature": f"sha256={signature}",
             "x-idempotency-key": f"{event.event_id}:{event.version}",
         }
-        if self.oidc_audience:
-            headers["authorization"] = (
-                f"Bearer {_fetch_identity_token(self.oidc_audience)}"
+        try:
+            if self.oidc_audience:
+                headers["authorization"] = (
+                    f"Bearer {_fetch_identity_token(self.oidc_audience)}"
+                )
+            response = httpx.post(
+                self.endpoint,
+                content=body,
+                headers=headers,
+                timeout=self.timeout_seconds,
             )
-        response = httpx.post(
-            self.endpoint,
-            content=body,
-            headers=headers,
-            timeout=self.timeout_seconds,
-        )
-        response.raise_for_status()
+            response.raise_for_status()
+        except (httpx.HTTPError, GoogleAuthError, SecurityError) as exc:
+            raise DeliveryError(f"AgroLog delivery failed: {type(exc).__name__}") from exc
         return response
 
 
@@ -80,7 +96,7 @@ class OutboxDispatcher:
                 raise RuntimeError("outbox returned event outside dispatcher tenant")
             try:
                 self.client.send(event)
-            except Exception as exc:
+            except DeliveryError as exc:
                 self.store.mark_outbox_failed(
                     self.tenant_id,
                     outbox_id,
