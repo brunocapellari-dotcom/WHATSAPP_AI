@@ -39,6 +39,7 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -e ".[test]"
       - run: python -m pip check
+      - run: bash -n scripts/*.sh
       - run: ruff check app scripts tests
       - run: mypy --ignore-missing-imports --check-untyped-defs app scripts
       - run: bandit -q -r app scripts
