@@ -137,9 +137,12 @@ def test_worker_is_tenant_scoped_and_cannot_read_raw(
     outbox_id_b, pending_event_b = pending_b[0]
     assert pending_event_b.event_id == event_b.event_id
 
-    with psycopg.connect(worker_url, autocommit=True) as conn, conn.cursor() as cur:
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            cur.execute("SELECT count(*) FROM whatsapp_raw_events")
+    with (
+        psycopg.connect(worker_url, autocommit=True) as conn,
+        conn.cursor() as cur,
+        pytest.raises(psycopg.errors.InsufficientPrivilege),
+    ):
+        cur.execute("SELECT count(*) FROM whatsapp_raw_events")
 
     counts_a = worker.outbox_status_counts("tenant-a")
     counts_b = worker.outbox_status_counts("tenant-b")
