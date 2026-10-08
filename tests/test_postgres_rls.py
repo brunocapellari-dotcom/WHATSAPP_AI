@@ -32,7 +32,7 @@ def database_roles() -> tuple[str, str]:
     assert ADMIN_URL is not None
     applied = apply_migrations(ADMIN_URL)
     assert set(applied).issubset(
-        {"001_core.sql", "002_rls.sql", "003_upgrade_existing.sql"}
+        {"001_core.sql", "002_rls.sql", "003_upgrade_existing.sql", "004_scope_worker_tenant.sql"}
     )
     assert apply_migrations(ADMIN_URL) == []
 
@@ -97,7 +97,7 @@ def test_rls_hides_rows_without_matching_tenant_session(
             assert cur.fetchone()[0] == 1
 
 
-def test_worker_can_dispatch_outbox_but_cannot_read_raw(
+def test_worker_is_tenant_scoped_and_cannot_read_raw(
     database_roles: tuple[str, str],
 ) -> None:
     ingestor_url, worker_url = database_roles
@@ -108,35 +108,54 @@ def test_worker_can_dispatch_outbox_but_cannot_read_raw(
         worker_mode=True,
     )
 
-    event = FreightEvent(
+    event_a = FreightEvent(
         tenant_id="tenant-a",
         classification=FreightClassification.FREIGHT_OFFER,
-        source_event_ids=["source-1"],
-        raw_reference="postgres://raw/source-1",
+        source_event_ids=["source-a"],
+        raw_reference="postgres://raw/source-a",
         timestamp=datetime(2026, 10, 7, 12, 0, tzinfo=UTC),
         product="SOJA",
         confidence=0.9,
     )
-    ingestor.enqueue_outbox(event)
+    event_b = FreightEvent(
+        tenant_id="tenant-b",
+        classification=FreightClassification.FREIGHT_OFFER,
+        source_event_ids=["source-b"],
+        raw_reference="postgres://raw/source-b",
+        timestamp=datetime(2026, 10, 7, 12, 0, tzinfo=UTC),
+        product="MILHO",
+        confidence=0.9,
+    )
+    ingestor.enqueue_outbox(event_a)
+    ingestor.enqueue_outbox(event_b)
 
-    pending = worker.pending_outbox(limit=10)
-    assert len(pending) == 1
-    outbox_id, pending_event = pending[0]
-    assert pending_event.event_id == event.event_id
+    pending_a = worker.pending_outbox("tenant-a", limit=10)
+    assert len(pending_a) == 1
+    outbox_id_a, pending_event_a = pending_a[0]
+    assert pending_event_a.event_id == event_a.event_id
+
+    pending_b = worker.pending_outbox("tenant-b", limit=10)
+    assert len(pending_b) == 1
+    outbox_id_b, pending_event_b = pending_b[0]
+    assert pending_event_b.event_id == event_b.event_id
 
     with psycopg.connect(worker_url, autocommit=True) as conn:
         with conn.cursor() as cur:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 cur.execute("SELECT count(*) FROM whatsapp_raw_events")
 
-    counts = worker.outbox_status_counts()
-    assert counts["PROCESSING"] == 1
-    assert counts["DEAD"] == 0
+    counts_a = worker.outbox_status_counts("tenant-a")
+    counts_b = worker.outbox_status_counts("tenant-b")
+    assert counts_a["PROCESSING"] == 1
+    assert counts_b["PROCESSING"] == 1
 
-    worker.mark_outbox_sent(outbox_id)
-    counts = worker.outbox_status_counts()
-    assert counts["PROCESSING"] == 0
-    assert counts["SENT"] >= 1
+    worker.mark_outbox_sent("tenant-b", outbox_id_a)
+    assert worker.outbox_status_counts("tenant-a")["PROCESSING"] == 1
+
+    worker.mark_outbox_sent("tenant-a", outbox_id_a)
+    worker.mark_outbox_sent("tenant-b", outbox_id_b)
+    assert worker.outbox_status_counts("tenant-a")["SENT"] >= 1
+    assert worker.outbox_status_counts("tenant-b")["SENT"] >= 1
 
 
 def test_ingress_readiness_uses_rls_scoped_table_access(
