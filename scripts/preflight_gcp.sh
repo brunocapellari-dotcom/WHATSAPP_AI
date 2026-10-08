@@ -68,6 +68,15 @@ if [[ "$broad_binding" == "allUsers" || "$broad_binding" == "allAuthenticatedUse
   fail "AgroLog freight service has a broad public invoker binding"
 fi
 
+worker_sa="${WORKER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+worker_invoker="$(gcloud run services get-iam-policy "$AGROLOG_SERVICE_NAME" \
+  --region "$REGION" --project "$PROJECT_ID" \
+  --flatten='bindings[].members' \
+  --filter="bindings.role=roles/run.invoker AND bindings.members=serviceAccount:${worker_sa}" \
+  --format='value(bindings.members)' | head -n1)"
+[[ "$worker_invoker" == "serviceAccount:${worker_sa}" ]] \
+  || fail "worker service account lacks service-level roles/run.invoker on AgroLog freight service"
+
 echo "PREFLIGHT_PASS"
 echo "project=$PROJECT_ID"
 echo "region=$REGION"
