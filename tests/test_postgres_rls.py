@@ -36,28 +36,27 @@ def database_roles() -> tuple[str, str]:
     )
     assert apply_migrations(ADMIN_URL) == []
 
-    with psycopg.connect(ADMIN_URL) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_roles WHERE rolname='wa_test_ingestor'
-                    ) THEN
-                        CREATE ROLE wa_test_ingestor LOGIN PASSWORD 'ingestor-test-password';
-                    END IF;
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_roles WHERE rolname='wa_test_worker'
-                    ) THEN
-                        CREATE ROLE wa_test_worker LOGIN PASSWORD 'worker-test-password';
-                    END IF;
-                END
-                $$;
-                GRANT whatsapp_ingestor TO wa_test_ingestor;
-                GRANT whatsapp_worker TO wa_test_worker;
-                """
-            )
+    with psycopg.connect(ADMIN_URL) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_roles WHERE rolname='wa_test_ingestor'
+                ) THEN
+                    CREATE ROLE wa_test_ingestor LOGIN PASSWORD 'ingestor-test-password';
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_roles WHERE rolname='wa_test_worker'
+                ) THEN
+                    CREATE ROLE wa_test_worker LOGIN PASSWORD 'worker-test-password';
+                END IF;
+            END
+            $$;
+            GRANT whatsapp_ingestor TO wa_test_ingestor;
+            GRANT whatsapp_worker TO wa_test_worker;
+            """
+        )
         conn.commit()
 
     return (
@@ -83,18 +82,17 @@ def test_rls_hides_rows_without_matching_tenant_session(
     store = PostgresFreightStore(ingestor_url, RawCipher(b"0" * 32))
     store.save_raw("tenant-a", "fixture", _raw("rls-1"))
 
-    with psycopg.connect(ingestor_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM whatsapp_raw_events")
-            assert cur.fetchone()[0] == 0
+    with psycopg.connect(ingestor_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM whatsapp_raw_events")
+        assert cur.fetchone()[0] == 0
 
-            cur.execute("SELECT set_config('app.tenant_id', 'tenant-b', true)")
-            cur.execute("SELECT count(*) FROM whatsapp_raw_events")
-            assert cur.fetchone()[0] == 0
+        cur.execute("SELECT set_config('app.tenant_id', 'tenant-b', true)")
+        cur.execute("SELECT count(*) FROM whatsapp_raw_events")
+        assert cur.fetchone()[0] == 0
 
-            cur.execute("SELECT set_config('app.tenant_id', 'tenant-a', true)")
-            cur.execute("SELECT count(*) FROM whatsapp_raw_events")
-            assert cur.fetchone()[0] == 1
+        cur.execute("SELECT set_config('app.tenant_id', 'tenant-a', true)")
+        cur.execute("SELECT count(*) FROM whatsapp_raw_events")
+        assert cur.fetchone()[0] == 1
 
 
 def test_worker_is_tenant_scoped_and_cannot_read_raw(
@@ -139,10 +137,12 @@ def test_worker_is_tenant_scoped_and_cannot_read_raw(
     outbox_id_b, pending_event_b = pending_b[0]
     assert pending_event_b.event_id == event_b.event_id
 
-    with psycopg.connect(worker_url, autocommit=True) as conn:
-        with conn.cursor() as cur:
-            with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                cur.execute("SELECT count(*) FROM whatsapp_raw_events")
+    with (
+        psycopg.connect(worker_url, autocommit=True) as conn,
+        conn.cursor() as cur,
+        pytest.raises(psycopg.errors.InsufficientPrivilege),
+    ):
+        cur.execute("SELECT count(*) FROM whatsapp_raw_events")
 
     counts_a = worker.outbox_status_counts("tenant-a")
     counts_b = worker.outbox_status_counts("tenant-b")

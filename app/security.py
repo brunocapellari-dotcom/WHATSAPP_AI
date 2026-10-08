@@ -18,11 +18,11 @@ class WebhookSecretResolver:
     secrets: dict[str, str]
 
     @classmethod
-    def from_env(cls) -> "WebhookSecretResolver":
+    def from_env(cls) -> WebhookSecretResolver:
         raw = os.environ.get("WHATSAPP_WEBHOOK_SECRETS", "{}")
         parsed = json.loads(raw)
         if not isinstance(parsed, dict):
-            raise RuntimeError("WHATSAPP_WEBHOOK_SECRETS must be a JSON object")
+            raise TypeError("WHATSAPP_WEBHOOK_SECRETS must be a JSON object")
         return cls({str(k): str(v) for k, v in parsed.items()})
 
     def resolve(self, tenant_id: str, provider: str) -> str:
@@ -70,6 +70,22 @@ def validate_egress_url(url: str, allowed_hosts: set[str]) -> str:
     if parsed.username or parsed.password:
         raise SecurityError("credentials in destination URL are forbidden")
     return url
+
+
+def validate_oidc_audience(endpoint: str, audience: str) -> str:
+    endpoint_parsed = urlparse(endpoint)
+    audience_parsed = urlparse(audience)
+    if audience_parsed.scheme != "https" or not audience_parsed.hostname:
+        raise SecurityError("OIDC audience must be an HTTPS service origin")
+    if audience_parsed.username or audience_parsed.password:
+        raise SecurityError("credentials in OIDC audience are forbidden")
+    if audience_parsed.query or audience_parsed.fragment:
+        raise SecurityError("OIDC audience query/fragment is forbidden")
+    if audience_parsed.path not in {"", "/"}:
+        raise SecurityError("OIDC audience must not include an application path")
+    if audience_parsed.hostname != endpoint_parsed.hostname:
+        raise SecurityError("OIDC audience host must match egress endpoint host")
+    return audience.rstrip("/")
 
 
 def sha256_hex(data: bytes) -> str:

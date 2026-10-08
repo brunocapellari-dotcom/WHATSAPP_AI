@@ -8,8 +8,9 @@ version = "0.1.0"
 description = "Authorized WhatsApp intelligence pipeline for AgroLog freight events."
 requires-python = ">=3.12"
 dependencies = [
-  "cryptography>=45,<47",
+  "cryptography>=50,<51",
   "fastapi>=0.116,<1",
+  "google-auth[requests]>=2.35,<3",
   "httpx>=0.28,<1",
   "psycopg[binary]>=3.2,<4",
   "pydantic>=2.11,<3",
@@ -18,8 +19,11 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
+  "bandit>=1.8,<2",
+  "mypy>=1.18,<2",
   "pytest>=8.4,<10",
   "pytest-asyncio>=1.1,<2",
+  "ruff>=0.14,<1",
 ]
 
 [tool.pytest.ini_options]

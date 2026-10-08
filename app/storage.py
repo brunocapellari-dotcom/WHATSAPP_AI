@@ -118,7 +118,7 @@ class RawCipher:
         self._aes = AESGCM(key)
 
     @classmethod
-    def from_env(cls) -> "RawCipher":
+    def from_env(cls) -> RawCipher:
         import base64
 
         value = os.environ.get("WHATSAPP_RAW_ENCRYPTION_KEY_B64")
@@ -135,7 +135,7 @@ class PostgresFreightStore:
     def __init__(
         self,
         database_url: str,
-        cipher: RawCipher,
+        cipher: RawCipher | None,
         *,
         worker_mode: bool = False,
         max_outbox_attempts: int = 8,
@@ -152,14 +152,14 @@ class PostgresFreightStore:
         self.claim_timeout_seconds = claim_timeout_seconds
 
     @classmethod
-    def from_env(cls, *, worker: bool = False) -> "PostgresFreightStore":
+    def from_env(cls, *, worker: bool = False) -> PostgresFreightStore:
         env_name = "DATABASE_URL_WORKER" if worker else "DATABASE_URL"
         url = os.environ.get(env_name)
         if not url:
             raise RuntimeError(f"{env_name} is required")
         return cls(
             url,
-            RawCipher.from_env(),
+            None if worker else RawCipher.from_env(),
             worker_mode=worker,
             max_outbox_attempts=int(os.environ.get("OUTBOX_MAX_ATTEMPTS", "8")),
             claim_timeout_seconds=int(os.environ.get("OUTBOX_CLAIM_TIMEOUT_SECONDS", "300")),
@@ -176,249 +176,239 @@ class PostgresFreightStore:
             raise RuntimeError("outbox dispatch requires DATABASE_URL_WORKER")
 
     def save_raw(self, tenant_id: str, provider: str, event: RawInboundEvent) -> str:
-        raw = event.model_dump_json().encode("utf-8")
+        if self.cipher is None:
+            raise RuntimeError("raw encryption is unavailable in worker mode")
+        raw = event.model_dump_json().encode()
         digest = sha256_hex(raw)
-        aad = f"{tenant_id}:{provider}:{event.source_event_id}".encode("utf-8")
+        aad = f"{tenant_id}:{provider}:{event.source_event_id}".encode()
         nonce, ciphertext = self.cipher.encrypt(raw, aad)
-        with psycopg.connect(self.database_url) as conn:
-            with conn.cursor() as cur:
-                self._set_tenant(cur, tenant_id)
-                cur.execute(
-                    """
-                    INSERT INTO whatsapp_raw_events
-                    (tenant_id, provider, source_event_id, source, message_timestamp, payload_hash, nonce, ciphertext, attachment_metadata)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
-                    ON CONFLICT (tenant_id, provider, source_event_id) DO NOTHING
-                    """,
-                    (
-                        tenant_id,
-                        provider,
-                        event.source_event_id,
-                        event.source,
-                        event.message_timestamp,
-                        digest,
-                        nonce,
-                        ciphertext,
-                        json.dumps([a.model_dump(mode="json") for a in event.attachments]),
-                    ),
-                )
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
+            cur.execute(
+                """
+                INSERT INTO whatsapp_raw_events
+                (tenant_id, provider, source_event_id, source, message_timestamp, payload_hash, nonce, ciphertext, attachment_metadata)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                ON CONFLICT (tenant_id, provider, source_event_id) DO NOTHING
+                """,
+                (
+                    tenant_id,
+                    provider,
+                    event.source_event_id,
+                    event.source,
+                    event.message_timestamp,
+                    digest,
+                    nonce,
+                    ciphertext,
+                    json.dumps([a.model_dump(mode="json") for a in event.attachments]),
+                ),
+            )
             conn.commit()
         return f"postgres://whatsapp_raw_events/{tenant_id}/{provider}/{event.source_event_id}"
 
     def has_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> bool:
-        with psycopg.connect(self.database_url) as conn:
-            with conn.cursor() as cur:
-                self._set_tenant(cur, tenant_id)
-                cur.execute(
-                    "SELECT 1 FROM whatsapp_processed_source_events WHERE tenant_id=%s AND provider=%s AND source_event_id=%s",
-                    (tenant_id, provider, source_event_id),
-                )
-                return cur.fetchone() is not None
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
+            cur.execute(
+                "SELECT 1 FROM whatsapp_processed_source_events WHERE tenant_id=%s AND provider=%s AND source_event_id=%s",
+                (tenant_id, provider, source_event_id),
+            )
+            return cur.fetchone() is not None
 
     def mark_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> None:
-        with psycopg.connect(self.database_url) as conn:
-            with conn.cursor() as cur:
-                self._set_tenant(cur, tenant_id)
-                cur.execute(
-                    """
-                    INSERT INTO whatsapp_processed_source_events (tenant_id, provider, source_event_id)
-                    VALUES (%s,%s,%s) ON CONFLICT DO NOTHING
-                    """,
-                    (tenant_id, provider, source_event_id),
-                )
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
+            cur.execute(
+                """
+                INSERT INTO whatsapp_processed_source_events (tenant_id, provider, source_event_id)
+                VALUES (%s,%s,%s) ON CONFLICT DO NOTHING
+                """,
+                (tenant_id, provider, source_event_id),
+            )
             conn.commit()
 
     def find_logical_event(self, tenant_id: str, logical_key: str) -> FreightEvent | None:
-        with psycopg.connect(self.database_url) as conn:
-            with conn.cursor() as cur:
-                self._set_tenant(cur, tenant_id)
-                cur.execute(
-                    "SELECT payload FROM whatsapp_freight_events WHERE tenant_id=%s AND logical_key=%s",
-                    (tenant_id, logical_key),
-                )
-                row = cur.fetchone()
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
+            cur.execute(
+                "SELECT payload FROM whatsapp_freight_events WHERE tenant_id=%s AND logical_key=%s",
+                (tenant_id, logical_key),
+            )
+            row = cur.fetchone()
         return FreightEvent.model_validate(row[0]) if row else None
 
     def recent_events(self, tenant_id: str, limit: int = 100) -> list[tuple[str, FreightEvent]]:
         limit = max(1, min(limit, 500))
-        with psycopg.connect(self.database_url) as conn:
-            with conn.cursor() as cur:
-                self._set_tenant(cur, tenant_id)
-                cur.execute(
-                    """
-                    SELECT logical_key, payload
-                    FROM whatsapp_freight_events
-                    WHERE tenant_id=%s
-                    ORDER BY updated_at DESC
-                    LIMIT %s
-                    """,
-                    (tenant_id, limit),
-                )
-                rows = cur.fetchall()
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
+            cur.execute(
+                """
+                SELECT logical_key, payload
+                FROM whatsapp_freight_events
+                WHERE tenant_id=%s
+                ORDER BY updated_at DESC
+                LIMIT %s
+                """,
+                (tenant_id, limit),
+            )
+            rows = cur.fetchall()
         return [(str(row[0]), FreightEvent.model_validate(row[1])) for row in rows]
 
     def save_event(self, event: FreightEvent, logical_key: str) -> None:
         payload = event.model_dump(mode="json")
-        with psycopg.connect(self.database_url) as conn:
-            with conn.cursor() as cur:
-                self._set_tenant(cur, event.tenant_id)
-                cur.execute(
-                    """
-                    INSERT INTO whatsapp_freight_events (tenant_id, logical_key, event_id, version, payload)
-                    VALUES (%s,%s,%s,%s,%s::jsonb)
-                    ON CONFLICT (tenant_id, logical_key) DO UPDATE
-                    SET event_id=EXCLUDED.event_id, version=EXCLUDED.version, payload=EXCLUDED.payload, updated_at=now()
-                    """,
-                    (
-                        event.tenant_id,
-                        logical_key,
-                        event.event_id,
-                        event.version,
-                        json.dumps(payload),
-                    ),
-                )
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, event.tenant_id)
+            cur.execute(
+                """
+                INSERT INTO whatsapp_freight_events (tenant_id, logical_key, event_id, version, payload)
+                VALUES (%s,%s,%s,%s,%s::jsonb)
+                ON CONFLICT (tenant_id, logical_key) DO UPDATE
+                SET event_id=EXCLUDED.event_id, version=EXCLUDED.version, payload=EXCLUDED.payload, updated_at=now()
+                """,
+                (
+                    event.tenant_id,
+                    logical_key,
+                    event.event_id,
+                    event.version,
+                    json.dumps(payload),
+                ),
+            )
             conn.commit()
 
     def enqueue_outbox(self, event: FreightEvent) -> None:
-        with psycopg.connect(self.database_url) as conn:
-            with conn.cursor() as cur:
-                self._set_tenant(cur, event.tenant_id)
-                cur.execute(
-                    """
-                    INSERT INTO whatsapp_agrolog_outbox
-                    (tenant_id, event_id, event_version, payload)
-                    VALUES (%s,%s,%s,%s::jsonb)
-                    ON CONFLICT (event_id, event_version) DO NOTHING
-                    """,
-                    (
-                        event.tenant_id,
-                        event.event_id,
-                        event.version,
-                        json.dumps(event.model_dump(mode="json")),
-                    ),
-                )
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, event.tenant_id)
+            cur.execute(
+                """
+                INSERT INTO whatsapp_agrolog_outbox
+                (tenant_id, event_id, event_version, payload)
+                VALUES (%s,%s,%s,%s::jsonb)
+                ON CONFLICT (event_id, event_version) DO NOTHING
+                """,
+                (
+                    event.tenant_id,
+                    event.event_id,
+                    event.version,
+                    json.dumps(event.model_dump(mode="json")),
+                ),
+            )
             conn.commit()
 
     def pending_outbox(self, tenant_id: str, limit: int = 100) -> list[tuple[int, FreightEvent]]:
         self._require_worker()
-        with psycopg.connect(self.database_url) as conn:
-            with conn.cursor() as cur:
-                self._set_tenant(cur, tenant_id)
-                cur.execute(
-                    """
-                    WITH claimed AS (
-                        SELECT outbox_id
-                        FROM whatsapp_agrolog_outbox
-                        WHERE tenant_id=%s
-                          AND (
-                            (status='PENDING' AND next_attempt_at <= now())
-                            OR (
-                                status='PROCESSING'
-                                AND processing_started_at < now() - make_interval(secs => %s)
-                            )
-                          )
-                        ORDER BY outbox_id
-                        LIMIT %s
-                        FOR UPDATE SKIP LOCKED
-                    )
-                    UPDATE whatsapp_agrolog_outbox AS o
-                    SET status='PROCESSING', processing_started_at=now()
-                    FROM claimed
-                    WHERE o.outbox_id = claimed.outbox_id
-                      AND o.tenant_id=%s
-                    RETURNING o.outbox_id, o.payload
-                    """,
-                    (tenant_id, self.claim_timeout_seconds, limit, tenant_id),
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
+            cur.execute(
+                """
+                WITH claimed AS (
+                    SELECT outbox_id
+                    FROM whatsapp_agrolog_outbox
+                    WHERE tenant_id=%s
+                      AND (
+                        (status='PENDING' AND next_attempt_at <= now())
+                        OR (
+                            status='PROCESSING'
+                            AND processing_started_at < now() - make_interval(secs => %s)
+                        )
+                      )
+                    ORDER BY outbox_id
+                    LIMIT %s
+                    FOR UPDATE SKIP LOCKED
                 )
-                rows = cur.fetchall()
+                UPDATE whatsapp_agrolog_outbox AS o
+                SET status='PROCESSING', processing_started_at=now()
+                FROM claimed
+                WHERE o.outbox_id = claimed.outbox_id
+                  AND o.tenant_id=%s
+                RETURNING o.outbox_id, o.payload
+                """,
+                (tenant_id, self.claim_timeout_seconds, limit, tenant_id),
+            )
+            rows = cur.fetchall()
             conn.commit()
         return [(int(row[0]), FreightEvent.model_validate(row[1])) for row in rows]
 
     def mark_outbox_sent(self, tenant_id: str, outbox_id: int) -> None:
         self._require_worker()
-        with psycopg.connect(self.database_url) as conn:
-            with conn.cursor() as cur:
-                self._set_tenant(cur, tenant_id)
-                cur.execute(
-                    """
-                    UPDATE whatsapp_agrolog_outbox
-                    SET status='SENT', sent_at=now(), last_error=NULL, processing_started_at=NULL
-                    WHERE outbox_id=%s AND tenant_id=%s
-                    """,
-                    (outbox_id, tenant_id),
-                )
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
+            cur.execute(
+                """
+                UPDATE whatsapp_agrolog_outbox
+                SET status='SENT', sent_at=now(), last_error=NULL, processing_started_at=NULL
+                WHERE outbox_id=%s AND tenant_id=%s
+                """,
+                (outbox_id, tenant_id),
+            )
             conn.commit()
 
     def mark_outbox_failed(self, tenant_id: str, outbox_id: int, error: str) -> None:
         self._require_worker()
-        with psycopg.connect(self.database_url) as conn:
-            with conn.cursor() as cur:
-                self._set_tenant(cur, tenant_id)
-                cur.execute(
-                    """
-                    UPDATE whatsapp_agrolog_outbox
-                    SET attempts=attempts+1,
-                        status=CASE
-                            WHEN attempts+1 >= %s THEN 'DEAD'
-                            ELSE 'PENDING'
-                        END,
-                        dead_at=CASE
-                            WHEN attempts+1 >= %s THEN now()
-                            ELSE NULL
-                        END,
-                        last_error=%s,
-                        processing_started_at=NULL,
-                        next_attempt_at=CASE
-                            WHEN attempts+1 >= %s THEN next_attempt_at
-                            ELSE now() + make_interval(
-                                secs => LEAST(3600, 30 * power(2, LEAST(attempts, 7)))
-                            )
-                        END
-                    WHERE outbox_id=%s AND tenant_id=%s
-                    """,
-                    (
-                        self.max_outbox_attempts,
-                        self.max_outbox_attempts,
-                        error[:1000],
-                        self.max_outbox_attempts,
-                        outbox_id,
-                        tenant_id,
-                    ),
-                )
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
+            cur.execute(
+                """
+                UPDATE whatsapp_agrolog_outbox
+                SET attempts=attempts+1,
+                    status=CASE
+                        WHEN attempts+1 >= %s THEN 'DEAD'
+                        ELSE 'PENDING'
+                    END,
+                    dead_at=CASE
+                        WHEN attempts+1 >= %s THEN now()
+                        ELSE NULL
+                    END,
+                    last_error=%s,
+                    processing_started_at=NULL,
+                    next_attempt_at=CASE
+                        WHEN attempts+1 >= %s THEN next_attempt_at
+                        ELSE now() + make_interval(
+                            secs => LEAST(3600, 30 * power(2, LEAST(attempts, 7)))
+                        )
+                    END
+                WHERE outbox_id=%s AND tenant_id=%s
+                """,
+                (
+                    self.max_outbox_attempts,
+                    self.max_outbox_attempts,
+                    error[:1000],
+                    self.max_outbox_attempts,
+                    outbox_id,
+                    tenant_id,
+                ),
+            )
             conn.commit()
 
     def readiness_check(self) -> None:
         if self.worker_mode:
             raise RuntimeError("ingress readiness cannot use worker credentials")
-        with psycopg.connect(self.database_url, connect_timeout=5) as conn:
-            with conn.cursor() as cur:
-                self._set_tenant(cur, "__healthcheck__")
-                cur.execute(
-                    """
-                    SELECT 1
-                    FROM whatsapp_processed_source_events
-                    WHERE tenant_id=%s
-                    LIMIT 1
-                    """,
-                    ("__healthcheck__",),
-                )
+        with psycopg.connect(self.database_url, connect_timeout=5) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, "__healthcheck__")
+            cur.execute(
+                """
+                SELECT 1
+                FROM whatsapp_processed_source_events
+                WHERE tenant_id=%s
+                LIMIT 1
+                """,
+                ("__healthcheck__",),
+            )
 
     def outbox_status_counts(self, tenant_id: str) -> dict[str, int]:
         self._require_worker()
         counts = {"PENDING": 0, "PROCESSING": 0, "SENT": 0, "DEAD": 0}
-        with psycopg.connect(self.database_url, connect_timeout=5) as conn:
-            with conn.cursor() as cur:
-                self._set_tenant(cur, tenant_id)
-                cur.execute(
-                    """
-                    SELECT status, count(*)
-                    FROM whatsapp_agrolog_outbox
-                    WHERE tenant_id=%s
-                    GROUP BY status
-                    """,
-                    (tenant_id,),
-                )
-                for status, count in cur.fetchall():
-                    if status in counts:
-                        counts[str(status)] = int(count)
+        with psycopg.connect(self.database_url, connect_timeout=5) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
+            cur.execute(
+                """
+                SELECT status, count(*)
+                FROM whatsapp_agrolog_outbox
+                WHERE tenant_id=%s
+                GROUP BY status
+                """,
+                (tenant_id,),
+            )
+            for status, count in cur.fetchall():
+                if status in counts:
+                    counts[str(status)] = int(count)
         return counts
