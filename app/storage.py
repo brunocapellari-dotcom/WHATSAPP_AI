@@ -135,7 +135,7 @@ class PostgresFreightStore:
     def __init__(
         self,
         database_url: str,
-        cipher: RawCipher,
+        cipher: RawCipher | None,
         *,
         worker_mode: bool = False,
         max_outbox_attempts: int = 8,
@@ -159,7 +159,7 @@ class PostgresFreightStore:
             raise RuntimeError(f"{env_name} is required")
         return cls(
             url,
-            RawCipher.from_env(),
+            None if worker else RawCipher.from_env(),
             worker_mode=worker,
             max_outbox_attempts=int(os.environ.get("OUTBOX_MAX_ATTEMPTS", "8")),
             claim_timeout_seconds=int(os.environ.get("OUTBOX_CLAIM_TIMEOUT_SECONDS", "300")),
@@ -176,6 +176,8 @@ class PostgresFreightStore:
             raise RuntimeError("outbox dispatch requires DATABASE_URL_WORKER")
 
     def save_raw(self, tenant_id: str, provider: str, event: RawInboundEvent) -> str:
+        if self.cipher is None:
+            raise RuntimeError("raw encryption is unavailable in worker mode")
         raw = event.model_dump_json().encode("utf-8")
         digest = sha256_hex(raw)
         aad = f"{tenant_id}:{provider}:{event.source_event_id}".encode("utf-8")
