@@ -19,9 +19,9 @@ class FreightStore(Protocol):
     def recent_events(self, tenant_id: str, limit: int = 100) -> list[tuple[str, FreightEvent]]: ...
     def save_event(self, event: FreightEvent, logical_key: str) -> None: ...
     def enqueue_outbox(self, event: FreightEvent) -> None: ...
-    def pending_outbox(self, limit: int = 100) -> list[tuple[int, FreightEvent]]: ...
-    def mark_outbox_sent(self, outbox_id: int) -> None: ...
-    def mark_outbox_failed(self, outbox_id: int, error: str) -> None: ...
+    def pending_outbox(self, tenant_id: str, limit: int = 100) -> list[tuple[int, FreightEvent]]: ...
+    def mark_outbox_sent(self, tenant_id: str, outbox_id: int) -> None: ...
+    def mark_outbox_failed(self, tenant_id: str, outbox_id: int, error: str) -> None: ...
 
 
 class InMemoryFreightStore:
@@ -72,15 +72,23 @@ class InMemoryFreightStore:
         self.outbox[outbox_id] = event
         self.outbox_attempts[outbox_id] = 0
 
-    def pending_outbox(self, limit: int = 100) -> list[tuple[int, FreightEvent]]:
-        return sorted(self.outbox.items())[:limit]
+    def pending_outbox(self, tenant_id: str, limit: int = 100) -> list[tuple[int, FreightEvent]]:
+        return [
+            (outbox_id, event)
+            for outbox_id, event in sorted(self.outbox.items())
+            if event.tenant_id == tenant_id
+        ][:limit]
 
-    def mark_outbox_sent(self, outbox_id: int) -> None:
+    def mark_outbox_sent(self, tenant_id: str, outbox_id: int) -> None:
+        event = self.outbox.get(outbox_id)
+        if event is None or event.tenant_id != tenant_id:
+            return
         self.outbox.pop(outbox_id, None)
         self.outbox_attempts.pop(outbox_id, None)
 
-    def mark_outbox_failed(self, outbox_id: int, error: str) -> None:
-        if outbox_id not in self.outbox:
+    def mark_outbox_failed(self, tenant_id: str, outbox_id: int, error: str) -> None:
+        event = self.outbox.get(outbox_id)
+        if event is None or event.tenant_id != tenant_id:
             return
         attempts = self.outbox_attempts.get(outbox_id, 0) + 1
         self.outbox_attempts[outbox_id] = attempts
@@ -276,21 +284,24 @@ class PostgresFreightStore:
                 )
             conn.commit()
 
-    def pending_outbox(self, limit: int = 100) -> list[tuple[int, FreightEvent]]:
+    def pending_outbox(self, tenant_id: str, limit: int = 100) -> list[tuple[int, FreightEvent]]:
         self._require_worker()
         with psycopg.connect(self.database_url) as conn:
             with conn.cursor() as cur:
+                self._set_tenant(cur, tenant_id)
                 cur.execute(
                     """
                     WITH claimed AS (
                         SELECT outbox_id
                         FROM whatsapp_agrolog_outbox
-                        WHERE
+                        WHERE tenant_id=%s
+                          AND (
                             (status='PENDING' AND next_attempt_at <= now())
                             OR (
                                 status='PROCESSING'
                                 AND processing_started_at < now() - make_interval(secs => %s)
                             )
+                          )
                         ORDER BY outbox_id
                         LIMIT %s
                         FOR UPDATE SKIP LOCKED
@@ -299,32 +310,35 @@ class PostgresFreightStore:
                     SET status='PROCESSING', processing_started_at=now()
                     FROM claimed
                     WHERE o.outbox_id = claimed.outbox_id
+                      AND o.tenant_id=%s
                     RETURNING o.outbox_id, o.payload
                     """,
-                    (self.claim_timeout_seconds, limit),
+                    (tenant_id, self.claim_timeout_seconds, limit, tenant_id),
                 )
                 rows = cur.fetchall()
             conn.commit()
         return [(int(row[0]), FreightEvent.model_validate(row[1])) for row in rows]
 
-    def mark_outbox_sent(self, outbox_id: int) -> None:
+    def mark_outbox_sent(self, tenant_id: str, outbox_id: int) -> None:
         self._require_worker()
         with psycopg.connect(self.database_url) as conn:
             with conn.cursor() as cur:
+                self._set_tenant(cur, tenant_id)
                 cur.execute(
                     """
                     UPDATE whatsapp_agrolog_outbox
                     SET status='SENT', sent_at=now(), last_error=NULL, processing_started_at=NULL
-                    WHERE outbox_id=%s
+                    WHERE outbox_id=%s AND tenant_id=%s
                     """,
-                    (outbox_id,),
+                    (outbox_id, tenant_id),
                 )
             conn.commit()
 
-    def mark_outbox_failed(self, outbox_id: int, error: str) -> None:
+    def mark_outbox_failed(self, tenant_id: str, outbox_id: int, error: str) -> None:
         self._require_worker()
         with psycopg.connect(self.database_url) as conn:
             with conn.cursor() as cur:
+                self._set_tenant(cur, tenant_id)
                 cur.execute(
                     """
                     UPDATE whatsapp_agrolog_outbox
@@ -345,7 +359,7 @@ class PostgresFreightStore:
                                 secs => LEAST(3600, 30 * power(2, LEAST(attempts, 7)))
                             )
                         END
-                    WHERE outbox_id=%s
+                    WHERE outbox_id=%s AND tenant_id=%s
                     """,
                     (
                         self.max_outbox_attempts,
@@ -353,6 +367,7 @@ class PostgresFreightStore:
                         error[:1000],
                         self.max_outbox_attempts,
                         outbox_id,
+                        tenant_id,
                     ),
                 )
             conn.commit()
