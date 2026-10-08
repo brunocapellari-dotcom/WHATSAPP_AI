@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.integration import OutboxDispatcher
+from app.integration import DeliveryError, OutboxDispatcher
 from app.models import FreightClassification, FreightEvent
 from app.storage import InMemoryFreightStore
 
@@ -14,7 +14,7 @@ class FakeClient:
 
     def send(self, event: FreightEvent):
         if self.fail:
-            raise RuntimeError("down")
+            raise DeliveryError("down")
         self.sent.append(event.event_id)
         return object()
 
