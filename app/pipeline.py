@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from uuid import uuid4
 
 from .models import (
     FreightClassification,
@@ -280,7 +281,7 @@ class FreightPipeline:
                 classification = FreightClassification.UPDATE
 
         event = FreightEvent(
-            event_id=event_id or FreightEvent.model_fields["event_id"].default_factory(),
+            event_id=event_id or str(uuid4()),
             version=version,
             tenant_id=tenant_id,
             classification=classification,
