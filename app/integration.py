@@ -8,9 +8,15 @@ import time
 from dataclasses import dataclass
 
 import httpx
+from google.auth.transport.requests import Request
+from google.oauth2 import id_token
 
 from .models import FreightEvent
-from .security import validate_egress_url
+from .security import validate_egress_url, validate_oidc_audience
+
+
+def _fetch_identity_token(audience: str) -> str:
+    return id_token.fetch_id_token(Request(), audience)
 
 
 @dataclass(frozen=True)
@@ -18,6 +24,7 @@ class AgroLogClient:
     endpoint: str
     shared_secret: str
     allowed_hosts: set[str]
+    oidc_audience: str | None = None
     timeout_seconds: float = 10.0
 
     @classmethod
@@ -37,15 +44,20 @@ class AgroLogClient:
             timestamp.encode("ascii") + b"." + body,
             hashlib.sha256,
         ).hexdigest()
+        headers = {
+            "content-type": "application/json",
+            "x-agrolog-timestamp": timestamp,
+            "x-agrolog-signature": f"sha256={signature}",
+            "x-idempotency-key": f"{event.event_id}:{event.version}",
+        }
+        if self.oidc_audience:
+            headers["authorization"] = (
+                f"Bearer {_fetch_identity_token(self.oidc_audience)}"
+            )
         response = httpx.post(
             self.endpoint,
             content=body,
-            headers={
-                "content-type": "application/json",
-                "x-agrolog-timestamp": timestamp,
-                "x-agrolog-signature": f"sha256={signature}",
-                "x-idempotency-key": f"{event.event_id}:{event.version}",
-            },
+            headers=headers,
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
