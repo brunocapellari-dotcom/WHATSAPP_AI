@@ -32,7 +32,12 @@ def database_roles() -> tuple[str, str]:
     assert ADMIN_URL is not None
     applied = apply_migrations(ADMIN_URL)
     assert set(applied).issubset(
-        {"001_core.sql", "002_rls.sql", "003_upgrade_existing.sql"}
+        {
+            "001_core.sql",
+            "002_rls.sql",
+            "003_upgrade_existing.sql",
+            "004_scope_worker_tenant.sql",
+        }
     )
     assert apply_migrations(ADMIN_URL) == []
 
@@ -76,6 +81,18 @@ def _raw(source_event_id: str) -> RawInboundEvent:
     )
 
 
+def _freight_event(tenant_id: str, source_id: str) -> FreightEvent:
+    return FreightEvent(
+        tenant_id=tenant_id,
+        classification=FreightClassification.FREIGHT_OFFER,
+        source_event_ids=[source_id],
+        raw_reference=f"postgres://raw/{source_id}",
+        timestamp=datetime(2026, 10, 7, 12, 0, tzinfo=UTC),
+        product="SOJA",
+        confidence=0.9,
+    )
+
+
 def test_rls_hides_rows_without_matching_tenant_session(
     database_roles: tuple[str, str],
 ) -> None:
@@ -97,7 +114,24 @@ def test_rls_hides_rows_without_matching_tenant_session(
             assert cur.fetchone()[0] == 1
 
 
-def test_worker_can_dispatch_outbox_but_cannot_read_raw(
+def test_ingestor_cannot_write_another_tenant(
+    database_roles: tuple[str, str],
+) -> None:
+    ingestor_url, _ = database_roles
+    with psycopg.connect(ingestor_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT set_config('app.tenant_id', 'tenant-a', true)")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                cur.execute(
+                    """
+                    INSERT INTO whatsapp_processed_source_events
+                    (tenant_id, provider, source_event_id)
+                    VALUES ('tenant-b', 'fixture', 'cross-tenant')
+                    """
+                )
+
+
+def test_worker_is_tenant_scoped_and_cannot_read_raw(
     database_roles: tuple[str, str],
 ) -> None:
     ingestor_url, worker_url = database_roles
@@ -108,25 +142,30 @@ def test_worker_can_dispatch_outbox_but_cannot_read_raw(
         worker_mode=True,
     )
 
-    event = FreightEvent(
-        tenant_id="tenant-a",
-        classification=FreightClassification.FREIGHT_OFFER,
-        source_event_ids=["source-1"],
-        raw_reference="postgres://raw/source-1",
-        timestamp=datetime(2026, 10, 7, 12, 0, tzinfo=UTC),
-        product="SOJA",
-        confidence=0.9,
-    )
-    ingestor.enqueue_outbox(event)
+    event_a = _freight_event("tenant-a", "source-a")
+    event_b = _freight_event("tenant-b", "source-b")
+    ingestor.enqueue_outbox(event_a)
+    ingestor.enqueue_outbox(event_b)
 
-    pending = worker.pending_outbox(limit=10)
-    assert len(pending) == 1
-    outbox_id, pending_event = pending[0]
-    assert pending_event.event_id == event.event_id
+    pending_a = worker.pending_outbox("tenant-a", limit=10)
+    assert len(pending_a) == 1
+    outbox_id_a, pending_event_a = pending_a[0]
+    assert pending_event_a.event_id == event_a.event_id
+
+    pending_b = worker.pending_outbox("tenant-b", limit=10)
+    assert len(pending_b) == 1
+    outbox_id_b, pending_event_b = pending_b[0]
+    assert pending_event_b.event_id == event_b.event_id
 
     with psycopg.connect(worker_url, autocommit=True) as conn:
         with conn.cursor() as cur:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 cur.execute("SELECT count(*) FROM whatsapp_raw_events")
 
-    worker.mark_outbox_sent(outbox_id)
+    worker.mark_outbox_sent("tenant-b", outbox_id_a)
+    remaining_a = worker.pending_outbox("tenant-a", limit=10)
+    assert len(remaining_a) == 1
+    assert remaining_a[0][0] == outbox_id_a
+
+    worker.mark_outbox_sent("tenant-a", outbox_id_a)
+    worker.mark_outbox_sent("tenant-b", outbox_id_b)
