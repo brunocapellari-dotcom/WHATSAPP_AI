@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-import app.integration as integration
+from app import integration
 from app.integration import AgroLogClient
 from app.models import FreightClassification, FreightEvent
 from app.security import SecurityError
