@@ -71,7 +71,7 @@ echo "Building image $image"
 gcloud builds submit .   --project "$PROJECT_ID"   --service-account "$BUILD_SERVICE_ACCOUNT"   --gcs-source-staging-dir "gs://${BUILD_SOURCE_BUCKET}/source"   --tag "$image"
 
 echo "Applying checksum-verified migrations with temporary job"
-gcloud run jobs deploy "$MIGRATION_JOB_NAME"   --image "$image"   --region "$REGION"   --project "$PROJECT_ID"   --service-account "$migrator_sa"   --set-cloudsql-instances "$connection_name"   --update-secrets "DATABASE_URL_MIGRATOR=${DB_MIGRATOR_SECRET}:latest"   --set-env-vars "WHATSAPP_DB_INGEST_ROLE=${DB_INGEST_ROLE},WHATSAPP_DB_WORKER_ROLE=${DB_WORKER_ROLE}"   --command python   --args scripts/release_migrate.py   --max-retries 0   --task-timeout 10m   --quiet
+gcloud run jobs deploy "$MIGRATION_JOB_NAME"   --image "$image"   --region "$REGION"   --project "$PROJECT_ID"   --service-account "$migrator_sa"   --set-cloudsql-instances "$connection_name"   --update-secrets "DATABASE_URL_MIGRATOR=${DB_MIGRATOR_SECRET}:latest"   --set-env-vars "WHATSAPP_DB_INGEST_ROLE=${DB_INGEST_ROLE},WHATSAPP_DB_WORKER_ROLE=${DB_WORKER_ROLE}"   --command python   --args=-m,scripts.release_migrate   --max-retries 0   --task-timeout 10m   --quiet
 migration_job_created=1
 
 gcloud run jobs execute "$MIGRATION_JOB_NAME"   --region "$REGION" --project "$PROJECT_ID" --wait
