@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Iterable
 
 from .models import EntityValue, FreightClassification
 
 RATE_RE = re.compile(r"(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)")
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?55\s*)?\(?\d{2}\)?\s*9?\d{4}[-\s]?\d{4}(?!\d)")
 DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\b")
-URL_RE = re.compile(r"https?://[^\s]+", re.I)
-TON_RE = re.compile(r"\b(\d+(?:[.,]\d+)?)\s*(?:t|ton|tons|toneladas?)\b", re.I)
-VACANCY_RE = re.compile(r"\b(\d+)\s*(?:vagas?|cargas?|caminh[oõ]es?)\b", re.I)
+URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+TON_RE = re.compile(r"\b(\d+(?:[.,]\d+)?)\s*(?:t|ton|tons|toneladas?)\b", re.IGNORECASE)
+VACANCY_RE = re.compile(r"\b(\d+)\s*(?:vagas?|cargas?|caminh[oõ]es?)\b", re.IGNORECASE)
 
 PRODUCT_ALIASES = {
     "SOJA": "SOJA",
@@ -63,7 +63,7 @@ def _value_after_markers(lines: list[str], markers: Iterable[str]) -> str | None
         for marker in markers:
             marker_n = normalize_text(marker)
             if marker_n in normalized:
-                split = re.split(re.escape(marker), line, flags=re.I, maxsplit=1)
+                split = re.split(re.escape(marker), line, flags=re.IGNORECASE, maxsplit=1)
                 if len(split) == 2 and split[1].strip(" :-➡️🚀📍"):
                     return split[1].strip(" :-➡️🚀📍")
     return None
@@ -127,7 +127,7 @@ def parse_freight(text: str) -> ParsedFreight:
 
     rate_unit = None
     if rate is not None:
-        if re.search(r"(?:R\$\s*)?/?\s*(?:T|TON|TONELADA)\b", normalized, re.I):
+        if re.search(r"(?:R\$\s*)?/?\s*(?:T|TON|TONELADA)\b", normalized, re.IGNORECASE):
             rate_unit = "BRL/t"
         elif re.search(r"POR\s+(?:VIAGEM|CARGA)\b", normalized):
             rate_unit = "BRL/carga"
