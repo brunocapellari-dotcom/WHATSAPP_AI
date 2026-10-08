@@ -18,11 +18,11 @@ class WebhookSecretResolver:
     secrets: dict[str, str]
 
     @classmethod
-    def from_env(cls) -> "WebhookSecretResolver":
+    def from_env(cls) -> WebhookSecretResolver:
         raw = os.environ.get("WHATSAPP_WEBHOOK_SECRETS", "{}")
         parsed = json.loads(raw)
         if not isinstance(parsed, dict):
-            raise RuntimeError("WHATSAPP_WEBHOOK_SECRETS must be a JSON object")
+            raise TypeError("WHATSAPP_WEBHOOK_SECRETS must be a JSON object")
         return cls({str(k): str(v) for k, v in parsed.items()})
 
     def resolve(self, tenant_id: str, provider: str) -> str:
