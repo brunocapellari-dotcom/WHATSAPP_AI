@@ -4,14 +4,20 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from .models import FreightClassification, FreightEvent, IngestionResult, RawInboundEvent, TruthClassification
+from .models import (
+    FreightClassification,
+    FreightEvent,
+    IngestionResult,
+    RawInboundEvent,
+    TruthClassification,
+)
 from .parser import EntityResolver, ParsedFreight, normalize_text, parse_freight
 from .storage import FreightStore
 
 
 def _logical_key(parts: list[str | None]) -> str:
     normalized = "|".join(normalize_text(part or "") for part in parts)
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return hashlib.sha256(normalized.encode()).hexdigest()
 
 
 def _semantic_signature(event: FreightEvent) -> str:
@@ -29,7 +35,7 @@ def _semantic_signature(event: FreightEvent) -> str:
             "vacancies": event.metadata.get("vacancies"),
         },
     }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def _company(event: FreightEvent):
