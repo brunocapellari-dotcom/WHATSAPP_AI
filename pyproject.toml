@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
   "cryptography>=45,<47",
   "fastapi>=0.116,<1",
+  "google-auth[requests]>=2.35,<3",
   "httpx>=0.28,<1",
   "psycopg[binary]>=3.2,<4",
   "pydantic>=2.11,<3",
