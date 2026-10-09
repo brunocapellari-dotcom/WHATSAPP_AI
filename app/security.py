@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
-import ipaddress
 
 
 class SecurityError(ValueError):
