@@ -9,3 +9,4 @@ provider/wppconnect/pairing-qr.png
 deploy/local/.env
 deploy/local/backups/
 deploy/local/pairing-qr.png
+deploy/local/.local-ci-venv/
