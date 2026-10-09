@@ -1,0 +1,60 @@
+services:
+  bridge:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command:
+      - uvicorn
+      - app.provider_bridge:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8081"
+    env_file:
+      - .env
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    volumes:
+      - ./data/bridge:/data/bridge
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - provider_net
+
+  wppconnect:
+    image: wppconnect/wppconnect-server:sha-c192518
+    entrypoint:
+      - node
+      - /opt/whatsapp-ai/wpp-entrypoint.cjs
+    env_file:
+      - .env
+    environment:
+      PORT: "21465"
+      HOST: "http://127.0.0.1"
+      MANAGER_ENABLED: "false"
+      TOKEN_STORE_TYPE: "file"
+      CUSTOM_USER_DATA_DIR: "/data/userDataDir/"
+      WEBHOOK_URL: "http://bridge:8081/v1/wppconnect/events"
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:21465:21465"
+    volumes:
+      - ./wpp-entrypoint.cjs:/opt/whatsapp-ai/wpp-entrypoint.cjs:ro
+      - ./data/wpp/tokens:/usr/src/wpp-server/tokens
+      - ./data/wpp/userDataDir:/data/userDataDir
+    security_opt:
+      - no-new-privileges:true
+    shm_size: "512m"
+    networks:
+      - provider_net
+    depends_on:
+      bridge:
+        condition: service_started
+
+networks:
+  provider_net:
+    driver: bridge
