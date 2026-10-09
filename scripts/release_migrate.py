@@ -45,6 +45,16 @@ def main() -> int:
                     sql.Identifier(worker_role)
                 )
             )
+            cur.execute(
+                sql.SQL("REVOKE cloudsqlsuperuser FROM {}").format(
+                    sql.Identifier(ingest_role)
+                )
+            )
+            cur.execute(
+                sql.SQL("REVOKE cloudsqlsuperuser FROM {}").format(
+                    sql.Identifier(worker_role)
+                )
+            )
         conn.commit()
 
     print(
