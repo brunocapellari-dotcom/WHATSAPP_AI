@@ -110,7 +110,10 @@ def main() -> int:
               (SELECT count(*) FROM whatsapp_agrolog_outbox)
             """
         )
-        raw_count, freight_count, processed_count, outbox_count = cur.fetchone()
+        row = cur.fetchone()
+        if row is None:
+            raise RuntimeError("restored table count query returned no row")
+        raw_count, freight_count, processed_count, outbox_count = row
 
     print(
         "RESTORE_VALIDATION_PASS "
