@@ -6,3 +6,6 @@ provider/wppconnect/data/
 *.sqlite3-wal
 *.sqlite3-shm
 provider/wppconnect/pairing-qr.png
+deploy/local/.env
+deploy/local/backups/
+deploy/local/pairing-qr.png
