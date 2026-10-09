@@ -109,3 +109,14 @@ def test_private_http_egress_is_fail_closed() -> None:
             {"127.0.0.1"},
             allow_private_http=True,
         )
+
+
+
+def test_windows_launcher_keeps_setup_and_pairing_minimal() -> None:
+    launcher = read("deploy/local/zero-cost.ps1")
+    assert 'Invoke-LocalBashScript "setup.sh"' in launcher
+    assert 'Invoke-LocalBashScript "start.sh"' in launcher
+    assert 'Invoke-LocalBashScript "pair.sh"' in launcher
+    assert 'Start-Process $QrFile' in launcher
+    assert "Get-Content $EnvFile" not in launcher
+    assert "Write-Host $EnvFile" not in launcher
