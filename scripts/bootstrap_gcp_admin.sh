@@ -21,6 +21,7 @@ BUILD_SA_NAME="${BUILD_SA_NAME:-whatsapp-ai-builder}"
 INGRESS_SA_NAME="${INGRESS_SA_NAME:-whatsapp-ai-ingress}"
 WORKER_SA_NAME="${WORKER_SA_NAME:-whatsapp-ai-worker}"
 MIGRATOR_SA_NAME="${MIGRATOR_SA_NAME:-whatsapp-ai-migrator}"
+RESTORE_SA_NAME="${RESTORE_SA_NAME:-whatsapp-ai-restore-drill}"
 
 DB_INGEST_USER="${DB_INGEST_ROLE:-whatsapp_ingest_app}"
 DB_WORKER_USER="${DB_WORKER_ROLE:-whatsapp_worker_app}"
@@ -108,12 +109,14 @@ ensure_sa "$BUILD_SA_NAME" "WhatsApp AI Cloud Build"
 ensure_sa "$INGRESS_SA_NAME" "WhatsApp AI ingress runtime"
 ensure_sa "$WORKER_SA_NAME" "WhatsApp AI outbox worker"
 ensure_sa "$MIGRATOR_SA_NAME" "WhatsApp AI migration runtime"
+ensure_sa "$RESTORE_SA_NAME" "WhatsApp AI restore drill"
 
 DEPLOYER_SA_EMAIL="${DEPLOYER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 BUILD_SA_EMAIL="${BUILD_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 INGRESS_SA_EMAIL="${INGRESS_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 WORKER_SA_EMAIL="${WORKER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 MIGRATOR_SA_EMAIL="${MIGRATOR_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+RESTORE_SA_EMAIL="${RESTORE_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
 if ! gcloud artifacts repositories describe "$AR_REPOSITORY"   --location "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
   gcloud artifacts repositories create "$AR_REPOSITORY"     --repository-format=docker --location "$REGION" --project "$PROJECT_ID"
@@ -210,11 +213,11 @@ PY
   unset provider_hmac webhook_json
 fi
 
-for sa in "$INGRESS_SA_EMAIL" "$WORKER_SA_EMAIL" "$MIGRATOR_SA_EMAIL"; do
+for sa in "$INGRESS_SA_EMAIL" "$WORKER_SA_EMAIL" "$MIGRATOR_SA_EMAIL" "$RESTORE_SA_EMAIL"; do
   ensure_project_role "$sa" roles/cloudsql.client
 done
 
-for pair in   "$DB_INGRESS_SECRET:$INGRESS_SA_EMAIL"   "$RAW_KEY_SECRET:$INGRESS_SA_EMAIL"   "$WEBHOOK_SECRETS_SECRET:$INGRESS_SA_EMAIL"   "$DB_WORKER_SECRET:$WORKER_SA_EMAIL"   "$AGROLOG_SHARED_SECRET_NAME:$WORKER_SA_EMAIL"   "$DB_MIGRATOR_SECRET:$MIGRATOR_SA_EMAIL"; do
+for pair in   "$DB_INGRESS_SECRET:$INGRESS_SA_EMAIL"   "$RAW_KEY_SECRET:$INGRESS_SA_EMAIL"   "$WEBHOOK_SECRETS_SECRET:$INGRESS_SA_EMAIL"   "$DB_WORKER_SECRET:$WORKER_SA_EMAIL"   "$AGROLOG_SHARED_SECRET_NAME:$WORKER_SA_EMAIL"   "$DB_MIGRATOR_SECRET:$MIGRATOR_SA_EMAIL"   "$DB_MIGRATOR_SECRET:$RESTORE_SA_EMAIL"; do
   secret="${pair%%:*}"
   principal="${pair#*:}"
   gcloud secrets describe "$secret" --project "$PROJECT_ID" >/dev/null 2>&1     || fail "required secret missing: $secret"
@@ -243,6 +246,11 @@ PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(project
 BUILD_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudbuild.iam.gserviceaccount.com"
 gcloud iam service-accounts add-iam-policy-binding "$BUILD_SA_EMAIL"   --project "$PROJECT_ID"   --member="serviceAccount:${BUILD_SERVICE_AGENT}"   --role=roles/iam.serviceAccountTokenCreator --quiet >/dev/null
 
+for role in roles/cloudsql.admin roles/run.admin roles/serviceusage.serviceUsageConsumer roles/logging.viewer; do
+  ensure_project_role "$RESTORE_SA_EMAIL" "$role"
+done
+gcloud iam service-accounts add-iam-policy-binding "$RESTORE_SA_EMAIL"   --project "$PROJECT_ID"   --member="serviceAccount:${RESTORE_SA_EMAIL}"   --role=roles/iam.serviceAccountUser --quiet >/dev/null
+
 if ! gcloud iam workload-identity-pools describe "$POOL_ID"   --location=global --project "$PROJECT_ID" >/dev/null 2>&1; then
   gcloud iam workload-identity-pools create "$POOL_ID"     --location=global --project "$PROJECT_ID" --display-name="GitHub Actions"
 fi
@@ -260,15 +268,17 @@ fi
 PROVIDER_RESOURCE="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/providers/${PROVIDER_ID}"
 PRINCIPAL="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.repository_id/${REPO_NUMERIC_ID}"
 gcloud iam service-accounts add-iam-policy-binding "$DEPLOYER_SA_EMAIL"   --project "$PROJECT_ID"   --member="$PRINCIPAL"   --role=roles/iam.workloadIdentityUser --quiet >/dev/null
+gcloud iam service-accounts add-iam-policy-binding "$RESTORE_SA_EMAIL"   --project "$PROJECT_ID"   --member="$PRINCIPAL"   --role=roles/iam.workloadIdentityUser --quiet >/dev/null
 
 printf '%s' "$PROJECT_ID" | gh secret set GCP_PROJECT_ID --repo "$REPO"
 printf '%s' "$PROVIDER_RESOURCE" | gh secret set GCP_WORKLOAD_IDENTITY_PROVIDER --repo "$REPO"
 printf '%s' "$DEPLOYER_SA_EMAIL" | gh secret set GCP_SERVICE_ACCOUNT --repo "$REPO"
+printf '%s' "$RESTORE_SA_EMAIL" | gh secret set GCP_RESTORE_SERVICE_ACCOUNT --repo "$REPO"
 printf '%s' "$BUILD_SA_EMAIL" | gh secret set GCP_BUILD_SERVICE_ACCOUNT --repo "$REPO"
 printf '%s' "$BUILD_SOURCE_BUCKET" | gh secret set GCP_BUILD_SOURCE_BUCKET --repo "$REPO"
 printf '%s' "$WHATSAPP_TENANT_ID" | gh secret set WHATSAPP_WORKER_TENANT_ID --repo "$REPO"
 
-for sa in "$DEPLOYER_SA_EMAIL" "$BUILD_SA_EMAIL" "$INGRESS_SA_EMAIL" "$WORKER_SA_EMAIL" "$MIGRATOR_SA_EMAIL"; do
+for sa in "$DEPLOYER_SA_EMAIL" "$BUILD_SA_EMAIL" "$INGRESS_SA_EMAIL" "$WORKER_SA_EMAIL" "$MIGRATOR_SA_EMAIL" "$RESTORE_SA_EMAIL"; do
   keys="$(gcloud iam service-accounts keys list     --iam-account="$sa" --managed-by=user --project "$PROJECT_ID" --format='value(name)' 2>/dev/null || true)"
   [[ -z "$keys" ]] || fail "USER_MANAGED service-account key found for $sa"
 done
