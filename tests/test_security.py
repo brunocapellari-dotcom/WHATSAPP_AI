@@ -4,6 +4,7 @@ import hashlib
 import hmac
 
 import pytest
+from fastapi import HTTPException
 
 from app.main import _validate_security_identifier
 from app.security import SecurityError, validate_egress_url, verify_webhook_signature
@@ -49,7 +50,7 @@ def test_egress_allowlist_blocks_ssrf_destination() -> None:
     ],
 )
 def test_security_identifiers_reject_ambiguous_or_unsafe_values(value: str, kind: str) -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException):
         _validate_security_identifier(value, kind=kind)
 
 
