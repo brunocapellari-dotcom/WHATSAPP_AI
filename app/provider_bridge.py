@@ -46,7 +46,7 @@ class BridgeCipher:
         self._aes = AESGCM(key)
 
     @classmethod
-    def from_env(cls) -> "BridgeCipher":
+    def from_env(cls) -> BridgeCipher:
         raw = os.environ.get("BRIDGE_OUTBOX_KEY_B64")
         if not raw:
             raise BridgeConfigError("BRIDGE_OUTBOX_KEY_B64 is required")
@@ -277,7 +277,7 @@ def _str_or_none(value: Any, *, max_length: int = 512) -> str | None:
 def _timestamp(payload: dict[str, Any]) -> datetime:
     value = payload.get("timestamp", payload.get("t"))
     if not isinstance(value, (int, float)):
-        raise ValueError("WPPConnect message timestamp is missing")
+        raise TypeError("WPPConnect message timestamp is missing")
     now = time.time()
     if value < 946684800 or value > now + 86400:
         raise ValueError("WPPConnect message timestamp is outside accepted range")
@@ -598,7 +598,7 @@ async def _dispatch_loop(app: FastAPI) -> None:
                 )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
             logger.error(
                 json.dumps(
                     {
