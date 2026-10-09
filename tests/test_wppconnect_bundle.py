@@ -41,6 +41,10 @@ def test_wpp_runtime_disables_media_download_and_side_effects() -> None:
     assert "onParticipantsChanged: false" in entry
     assert "onSelfMessage: false" in entry
     assert "MANAGER_ENABLED = 'false'" in entry
+    assert "--disable-web-security" not in entry
+    assert "--ignore-certificate-errors" not in entry
+    assert "--ignore-ssl-errors" not in entry
+    assert "config.createOptions.browserArgs = [" in entry
 
 
 def test_setup_never_prints_secrets_and_verifies_cloud_mapping() -> None:
@@ -69,3 +73,15 @@ def test_bridge_runs_non_root_with_persistent_volume() -> None:
     assert "bridge_data:/data/bridge" in compose
     assert "no-new-privileges:true" in compose
     assert "cap_drop:" in compose
+
+
+
+def test_pairing_keeps_credentials_out_of_curl_argv_and_qr_out_of_git() -> None:
+    pair = read("provider/wppconnect/pair.sh")
+    ignore = read(".gitignore")
+    assert 'curl --config "$token_cfg"' in pair
+    assert 'curl --config "$start_cfg"' in pair
+    assert "Authorization: Bearer $token" in pair
+    assert "pairing-qr.png" in pair
+    assert "os.chmod(target, 0o600)" in pair
+    assert "provider/wppconnect/pairing-qr.png" in ignore
