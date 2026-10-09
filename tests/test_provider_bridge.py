@@ -17,6 +17,7 @@ from app.provider_bridge import (
     SQLiteBridgeOutbox,
     normalize_wppconnect_event,
 )
+from app.security import SecurityError
 
 
 def wpp_payload(**overrides):
@@ -243,7 +244,7 @@ def test_target_path_and_host_are_fail_closed(tmp_path: Path) -> None:
             hmac_secret="shared-secret",
             allowed_hosts={"hooks.example.com"},
         )
-    with pytest.raises(Exception):
+    with pytest.raises(SecurityError):
         BridgeDispatcher(
             outbox,
             endpoint="https://evil.example.com/v1/providers/wppconnect/events",
