@@ -37,7 +37,12 @@ class AgroLogClient:
         endpoint = os.environ["AGROLOG_FREIGHT_INGEST_URL"]
         secret = os.environ["AGROLOG_SHARED_SECRET"]
         hosts = {item.strip() for item in os.environ.get("AGROLOG_EGRESS_ALLOWED_HOSTS", "").split(",") if item.strip()}
-        validate_egress_url(endpoint, hosts)
+        allow_private_http = os.environ.get("AGROLOG_ALLOW_PRIVATE_HTTP", "0") == "1"
+        validate_egress_url(
+            endpoint,
+            hosts,
+            allow_private_http=allow_private_http,
+        )
         audience = os.environ.get("AGROLOG_OIDC_AUDIENCE")
         if audience:
             audience = validate_oidc_audience(endpoint, audience)
@@ -49,7 +54,11 @@ class AgroLogClient:
         )
 
     def send(self, event: FreightEvent) -> httpx.Response:
-        validate_egress_url(self.endpoint, self.allowed_hosts)
+        validate_egress_url(
+            self.endpoint,
+            self.allowed_hosts,
+            allow_private_http=os.environ.get("AGROLOG_ALLOW_PRIVATE_HTTP", "0") == "1",
+        )
         body = json.dumps(event.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
         timestamp = str(int(time.time()))
         signature = hmac.new(
