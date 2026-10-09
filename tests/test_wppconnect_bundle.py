@@ -85,3 +85,14 @@ def test_pairing_keeps_credentials_out_of_curl_argv_and_qr_out_of_git() -> None:
     assert "pairing-qr.png" in pair
     assert "os.chmod(target, 0o600)" in pair
     assert "provider/wppconnect/pairing-qr.png" in ignore
+
+
+
+def test_provider_stack_has_health_resource_and_log_bounds() -> None:
+    compose = read("provider/wppconnect/docker-compose.yml")
+    assert compose.count("healthcheck:") == 2
+    assert "mem_limit: 512m" in compose
+    assert "mem_limit: 2g" in compose
+    assert 'max-size: "10m"' in compose
+    assert 'max-file: "3"' in compose
+    assert "condition: service_healthy" in compose
