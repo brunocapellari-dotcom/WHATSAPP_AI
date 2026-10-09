@@ -5,3 +5,4 @@ provider/wppconnect/data/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
+provider/wppconnect/pairing-qr.png
