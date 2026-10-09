@@ -239,6 +239,10 @@ for sa in "$BUILD_SA_EMAIL" "$INGRESS_SA_EMAIL" "$WORKER_SA_EMAIL" "$MIGRATOR_SA
   gcloud iam service-accounts add-iam-policy-binding "$sa"     --project "$PROJECT_ID"     --member="serviceAccount:${DEPLOYER_SA_EMAIL}"     --role=roles/iam.serviceAccountUser --quiet >/dev/null
 done
 
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+BUILD_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudbuild.iam.gserviceaccount.com"
+gcloud iam service-accounts add-iam-policy-binding "$BUILD_SA_EMAIL"   --project "$PROJECT_ID"   --member="serviceAccount:${BUILD_SERVICE_AGENT}"   --role=roles/iam.serviceAccountTokenCreator --quiet >/dev/null
+
 if ! gcloud iam workload-identity-pools describe "$POOL_ID"   --location=global --project "$PROJECT_ID" >/dev/null 2>&1; then
   gcloud iam workload-identity-pools create "$POOL_ID"     --location=global --project "$PROJECT_ID" --display-name="GitHub Actions"
 fi
