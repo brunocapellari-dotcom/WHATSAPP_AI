@@ -253,3 +253,38 @@ def test_target_path_and_host_are_fail_closed(tmp_path: Path) -> None:
             hmac_secret="shared-secret",
             allowed_hosts={"hooks.example.com"},
         )
+
+
+
+def test_oversized_sanitized_event_is_reduced_with_integrity_hash() -> None:
+    huge = "x" * 710_000
+    event = normalize_wppconnect_event(
+        wpp_payload(extra_blob=huge),
+        allowed_sessions={"freight-prod"},
+    )
+    assert event is not None
+    assert event.raw_event["_raw_event_truncated"] is True
+    assert event.raw_event["_raw_event_original_size_bytes"] > 700_000
+    assert len(event.raw_event["_raw_event_sha256"]) == 64
+    assert "extra_blob" not in event.raw_event
+
+
+def test_sent_records_can_be_pruned_without_touching_dead(tmp_path: Path, monkeypatch) -> None:
+    event = normalize_wppconnect_event(
+        wpp_payload(),
+        allowed_sessions={"freight-prod"},
+    )
+    assert event is not None
+    outbox = SQLiteBridgeOutbox(
+        str(tmp_path / "outbox.sqlite3"),
+        BridgeCipher(b"5" * 32),
+    )
+    outbox.ensure_schema()
+    outbox.enqueue(event)
+    claimed = outbox.claim()
+    assert len(claimed) == 1
+    outbox.mark_sent(claimed[0][0])
+
+    monkeypatch.setattr(bridge.time, "time", lambda: time.time() + 700_000)
+    assert outbox.prune_sent(604800) == 1
+    assert outbox.status_counts()["SENT"] == 0
