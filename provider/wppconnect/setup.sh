@@ -34,12 +34,14 @@ provider_hmac="$(gcloud secrets versions access latest   --secret="$PROVIDER_HMA
 [[ -n "$provider_hmac" ]] || fail "provider HMAC secret is empty"
 
 webhook_map="$(gcloud secrets versions access latest   --secret="$WEBHOOK_MAP_SECRET_NAME"   --project="$PROJECT_ID")"
-python3 - "$webhook_map" "$BRIDGE_TENANT_ID" "$BRIDGE_PROVIDER_ID" "$provider_hmac" <<'PY'
+printf '%s\n%s' "$provider_hmac" "$webhook_map" | \
+  python3 - "$BRIDGE_TENANT_ID" "$BRIDGE_PROVIDER_ID" <<'PY'
 import hmac
 import json
 import sys
 
-raw, tenant, provider, expected = sys.argv[1:]
+tenant, provider = sys.argv[1:]
+expected, raw = sys.stdin.read().split("\n", 1)
 mapping = json.loads(raw)
 if not isinstance(mapping, dict):
     raise SystemExit("webhook secret mapping is not a JSON object")
