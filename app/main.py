@@ -18,6 +18,7 @@ MAX_BODY_BYTES = int(os.environ.get("WHATSAPP_MAX_WEBHOOK_BYTES", "1000000"))
 REQUEST_ID_MAX = 128
 PROVIDER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 TENANT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 ALLOWED_MIME = {
     "image/jpeg",
     "image/png",
@@ -59,6 +60,13 @@ def _validate_attachments(event: RawInboundEvent) -> None:
     for attachment in event.attachments:
         if attachment.mime_type and attachment.mime_type.lower() not in ALLOWED_MIME:
             raise HTTPException(status_code=415, detail="attachment MIME is not allowed")
+        if attachment.storage_reference is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="attachment byte references are disabled until quarantine scanning is enabled",
+            )
+        if attachment.content_hash and not SHA256_RE.fullmatch(attachment.content_hash):
+            raise HTTPException(status_code=422, detail="attachment content_hash must be SHA-256")
 
 
 @app.middleware("http")
