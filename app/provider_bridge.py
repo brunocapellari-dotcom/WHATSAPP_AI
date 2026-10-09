@@ -313,9 +313,17 @@ def normalize_wppconnect_event(
     if payload.get("fromMe") is True:
         return None
 
-    source_event_id = _str_or_none(payload.get("id"), max_length=256)
-    if source_event_id is None or not ID_RE.fullmatch(source_event_id):
+    provider_message_id = _str_or_none(payload.get("id"), max_length=256)
+    if provider_message_id is None or not ID_RE.fullmatch(provider_message_id):
         raise ValueError("WPPConnect message id is invalid")
+    composite_id = f"{session}:{provider_message_id}"
+    if len(composite_id) <= 256 and ID_RE.fullmatch(composite_id):
+        source_event_id = composite_id
+    else:
+        source_event_id = (
+            "wpp-"
+            + hashlib.sha256(composite_id.encode("utf-8")).hexdigest()
+        )
 
     message_timestamp = _timestamp(payload)
     is_media = bool(payload.get("isMedia") or payload.get("isMMS"))
@@ -354,6 +362,7 @@ def normalize_wppconnect_event(
     metadata = {
         "provider": "wppconnect",
         "session": session,
+        "provider_message_id": provider_message_id,
         "from": sender,
         "to": _str_or_none(payload.get("to"), max_length=256),
         "author": _str_or_none(payload.get("author"), max_length=256),
@@ -366,6 +375,12 @@ def normalize_wppconnect_event(
         "quoted_message_id": _str_or_none(payload.get("quotedMsgId"), max_length=256),
         "media_bytes_accepted": False,
     }
+
+    quoted_id = metadata["quoted_message_id"]
+    if isinstance(quoted_id, str):
+        quoted_composite = f"{session}:{quoted_id}"
+        if len(quoted_composite) <= 256 and ID_RE.fullmatch(quoted_composite):
+            metadata["reply_to_source_event_id"] = quoted_composite
 
     return RawInboundEvent(
         source_event_id=source_event_id,
