@@ -11,13 +11,13 @@ services:
       - --port
       - "8081"
     env_file:
-      - .env
+      - bridge.env
     restart: unless-stopped
     read_only: true
     tmpfs:
       - /tmp:size=64m,noexec,nosuid,nodev
     volumes:
-      - ./data/bridge:/data/bridge
+      - bridge_data:/data/bridge
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -31,7 +31,7 @@ services:
       - node
       - /opt/whatsapp-ai/wpp-entrypoint.cjs
     env_file:
-      - .env
+      - wpp.env
     environment:
       PORT: "21465"
       HOST: "http://127.0.0.1"
@@ -44,8 +44,8 @@ services:
       - "127.0.0.1:21465:21465"
     volumes:
       - ./wpp-entrypoint.cjs:/opt/whatsapp-ai/wpp-entrypoint.cjs:ro
-      - ./data/wpp/tokens:/usr/src/wpp-server/tokens
-      - ./data/wpp/userDataDir:/data/userDataDir
+      - wpp_tokens:/usr/src/wpp-server/tokens
+      - wpp_userdata:/data/userDataDir
     security_opt:
       - no-new-privileges:true
     shm_size: "512m"
@@ -58,3 +58,8 @@ services:
 networks:
   provider_net:
     driver: bridge
+
+volumes:
+  bridge_data:
+  wpp_tokens:
+  wpp_userdata:
