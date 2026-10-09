@@ -24,6 +24,7 @@ services:
       - no-new-privileges:true
     networks:
       - data_net
+      - delivery_net
     logging:
       driver: json-file
       options:
@@ -242,6 +243,8 @@ networks:
     driver: bridge
     internal: true
   provider_net:
+    driver: bridge
+  delivery_net:
     driver: bridge
 
 volumes:
