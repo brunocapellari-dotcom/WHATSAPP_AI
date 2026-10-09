@@ -470,7 +470,12 @@ class BridgeDispatcher:
             raise BridgeConfigError("bridge tenant id is invalid")
         if not hmac_secret:
             raise BridgeConfigError("bridge HMAC secret is empty")
-        validated_endpoint = validate_egress_url(endpoint, allowed_hosts)
+        allow_private_http = os.environ.get("BRIDGE_ALLOW_PRIVATE_HTTP", "0") == "1"
+        validated_endpoint = validate_egress_url(
+            endpoint,
+            allowed_hosts,
+            allow_private_http=allow_private_http,
+        )
         expected_path = f"/v1/providers/{provider}/events"
         if urlparse(validated_endpoint).path != expected_path:
             raise BridgeConfigError(
