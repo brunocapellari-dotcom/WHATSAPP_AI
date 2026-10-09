@@ -239,6 +239,20 @@ class SQLiteBridgeOutbox:
                 (attempts, time.time() + delay, error[:1000], outbox_id),
             )
 
+    def prune_sent(self, retention_seconds: int = 604800) -> int:
+        if retention_seconds < 3600:
+            raise ValueError("sent retention must be at least one hour")
+        cutoff = time.time() - retention_seconds
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM provider_outbox
+                WHERE status='SENT' AND sent_at IS NOT NULL AND sent_at < ?
+                """,
+                (cutoff,),
+            )
+            return int(cursor.rowcount)
+
     def status_counts(self) -> dict[str, int]:
         counts = {"PENDING": 0, "PROCESSING": 0, "SENT": 0, "DEAD": 0}
         with self._connect() as conn:
@@ -571,6 +585,10 @@ async def _dispatch_loop(app: FastAPI) -> None:
         try:
             dispatcher: BridgeDispatcher = app.state.dispatcher
             result = await asyncio.to_thread(dispatcher.flush)
+            await asyncio.to_thread(
+                dispatcher.outbox.prune_sent,
+                int(os.environ.get("BRIDGE_SENT_RETENTION_SECONDS", "604800")),
+            )
             if result["sent"] or result["failed"]:
                 logger.info(
                     json.dumps(
