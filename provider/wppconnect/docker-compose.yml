@@ -1,0 +1,101 @@
+services:
+  bridge:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command:
+      - uvicorn
+      - app.provider_bridge:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8081"
+    env_file:
+      - bridge.env
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    volumes:
+      - bridge_data:/data/bridge
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: "0.75"
+    pids_limit: 128
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8081/healthz', timeout=2); raise SystemExit(0 if r.status == 200 else 1)"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - provider_net
+
+  wppconnect:
+    image: wppconnect/wppconnect-server:sha-c192518
+    entrypoint:
+      - node
+      - /opt/whatsapp-ai/wpp-entrypoint.cjs
+    env_file:
+      - wpp.env
+    environment:
+      PORT: "21465"
+      HOST: "http://127.0.0.1"
+      MANAGER_ENABLED: "false"
+      TOKEN_STORE_TYPE: "file"
+      CUSTOM_USER_DATA_DIR: "/data/userDataDir/"
+      WEBHOOK_URL: "http://bridge:8081/v1/wppconnect/events"
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:21465:21465"
+    volumes:
+      - ./wpp-entrypoint.cjs:/opt/whatsapp-ai/wpp-entrypoint.cjs:ro
+      - wpp_tokens:/usr/src/wpp-server/tokens
+      - wpp_userdata:/data/userDataDir
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    cpus: "2.0"
+    pids_limit: 512
+    shm_size: "512m"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:21465/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - provider_net
+    depends_on:
+      bridge:
+        condition: service_healthy
+
+networks:
+  provider_net:
+    driver: bridge
+
+volumes:
+  bridge_data:
+  wpp_tokens:
+  wpp_userdata:
