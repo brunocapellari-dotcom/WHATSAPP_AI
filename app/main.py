@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import uuid
 
@@ -15,6 +16,8 @@ from .storage import PostgresFreightStore
 
 MAX_BODY_BYTES = int(os.environ.get("WHATSAPP_MAX_WEBHOOK_BYTES", "1000000"))
 REQUEST_ID_MAX = 128
+PROVIDER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+TENANT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 ALLOWED_MIME = {
     "image/jpeg",
     "image/png",
@@ -43,6 +46,13 @@ def _request_id(value: str | None) -> str:
     ):
         return value
     return str(uuid.uuid4())
+
+
+def _validate_security_identifier(value: str, *, kind: str) -> str:
+    pattern = PROVIDER_ID_RE if kind == "provider" else TENANT_ID_RE
+    if not pattern.fullmatch(value):
+        raise HTTPException(status_code=400, detail=f"invalid {kind} identifier")
+    return value
 
 
 def _validate_attachments(event: RawInboundEvent) -> None:
@@ -121,6 +131,8 @@ async def provider_event(
     x_webhook_timestamp: str | None = Header(default=None),
     x_webhook_signature: str | None = Header(default=None),
 ) -> IngestionResult:
+    provider = _validate_security_identifier(provider, kind="provider")
+    x_tenant_id = _validate_security_identifier(x_tenant_id, kind="tenant")
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
         raise HTTPException(status_code=413, detail="webhook body too large")
