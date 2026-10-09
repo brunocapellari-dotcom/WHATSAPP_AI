@@ -33,14 +33,14 @@ def test_recurring_deploy_does_not_bootstrap_admin_resources() -> None:
         assert command not in combined
 
 
-def test_ingress_stays_private_and_has_dependency_probes() -> None:
+def test_ingress_is_only_reachable_through_load_balancer() -> None:
     deploy = read("scripts/deploy_gcp.sh")
-    assert "--no-allow-unauthenticated" in deploy
-    assert "\n  --allow-unauthenticated" not in deploy
+    assert "--ingress internal-and-cloud-load-balancing" in deploy
+    assert "--no-default-url" in deploy
+    assert "--no-invoker-iam-check" in deploy
+    assert "--ingress all" not in deploy
     assert 'httpGet.path=/readyz' in deploy
     assert 'httpGet.path=/healthz' in deploy
-    assert "allAuthenticatedUsers" in deploy
-    assert "allUsers" in deploy
 
 
 def test_migrations_run_before_ingress_and_privileged_job_is_deleted() -> None:
@@ -76,3 +76,35 @@ def test_preflight_requires_private_agrolog_and_worker_invoker() -> None:
     preflight = read("scripts/preflight_gcp.sh")
     assert "AgroLog freight service has a broad public invoker binding" in preflight
     assert "worker service account lacks service-level roles/run.invoker" in preflight
+
+
+def test_edge_bootstrap_requires_explicit_billable_opt_in() -> None:
+    edge = read("scripts/bootstrap_edge_gcp.sh")
+    assert 'ALLOW_BILLABLE_EDGE' in edge
+    assert '[[ "$ALLOW_BILLABLE_EDGE" == "1" ]]' in edge
+    assert "gcloud compute network-endpoint-groups create" in edge
+    assert "--network-endpoint-type=serverless" in edge
+    assert "gcloud compute backend-services create" in edge
+    assert "--load-balancing-scheme=EXTERNAL_MANAGED" in edge
+    assert "gcloud compute ssl-certificates create" in edge
+
+
+def test_edge_cloud_armor_defaults_to_deny_and_rate_limits_webhook_only() -> None:
+    edge = read("scripts/bootstrap_edge_gcp.sh")
+    assert "request.method == 'POST'" in edge
+    assert "/v1/providers/" in edge
+    assert "--action=throttle" in edge
+    assert "--exceed-action=deny-429" in edge
+    assert "--enforce-on-key=IP" in edge
+    assert "2147483647" in edge
+    assert "--action=deny-404" in edge
+
+
+def test_edge_validation_proves_no_direct_or_unsigned_access() -> None:
+    validate = read("scripts/validate_edge_gcp.sh")
+    assert "internal-and-cloud-load-balancing" in validate
+    assert "default URL is still enabled" in validate
+    assert "/healthz" in validate
+    assert '[[ "$health_code" == "404" ]]' in validate
+    assert "x-tenant-id: edge-probe" in validate
+    assert '[[ "$webhook_code" == "401" ]]' in validate
