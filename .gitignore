@@ -1,0 +1,7 @@
+provider/wppconnect/bridge.env
+provider/wppconnect/wpp.env
+provider/wppconnect/*.bak
+provider/wppconnect/data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
