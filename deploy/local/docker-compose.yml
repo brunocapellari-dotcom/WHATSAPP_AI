@@ -97,6 +97,7 @@ services:
         max-file: "3"
 
   worker:
+    profiles: ["delivery"]
     build:
       context: ../..
       dockerfile: Dockerfile
