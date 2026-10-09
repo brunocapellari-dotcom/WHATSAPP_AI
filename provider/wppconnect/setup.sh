@@ -34,8 +34,7 @@ provider_hmac="$(gcloud secrets versions access latest   --secret="$PROVIDER_HMA
 [[ -n "$provider_hmac" ]] || fail "provider HMAC secret is empty"
 
 webhook_map="$(gcloud secrets versions access latest   --secret="$WEBHOOK_MAP_SECRET_NAME"   --project="$PROJECT_ID")"
-printf '%s\n%s' "$provider_hmac" "$webhook_map" | \
-  python3 - "$BRIDGE_TENANT_ID" "$BRIDGE_PROVIDER_ID" <<'PY'
+printf '%s\n%s' "$provider_hmac" "$webhook_map" | python3 -c '
 import hmac
 import json
 import sys
@@ -48,7 +47,7 @@ if not isinstance(mapping, dict):
 actual = mapping.get(f"{tenant}:{provider}")
 if not isinstance(actual, str) or not hmac.compare_digest(actual, expected):
     raise SystemExit("provider HMAC does not match cloud webhook mapping")
-PY
+' "$BRIDGE_TENANT_ID" "$BRIDGE_PROVIDER_ID"
 unset webhook_map
 
 if [[ -f bridge.env || -f wpp.env ]]; then
