@@ -14,13 +14,15 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import FastAPI, HTTPException, Request, status
 
 from .models import AttachmentMetadata, RawInboundEvent
-from .security import SecurityError, validate_egress_url
+from .security import validate_egress_url
 
 logger = logging.getLogger("whatsapp_ai.provider_bridge")
 
@@ -152,32 +154,46 @@ class SQLiteBridgeOutbox:
                 (now, stale_before, max(1, min(limit, 100))),
             ).fetchall()
             ids = [int(row["outbox_id"]) for row in rows]
-            if ids:
-                placeholders = ",".join("?" for _ in ids)
+            for outbox_id in ids:
                 conn.execute(
-                    f"""
+                    """
                     UPDATE provider_outbox
                     SET status='PROCESSING', processing_started_at=?
-                    WHERE outbox_id IN ({placeholders})
+                    WHERE outbox_id=?
                     """,
-                    (now, *ids),
+                    (now, outbox_id),
                 )
             conn.execute("COMMIT")
 
         result: list[tuple[int, RawInboundEvent]] = []
         for row in rows:
+            outbox_id = int(row["outbox_id"])
             source_id = str(row["source_event_id"])
-            payload = self.cipher.decrypt(
-                bytes(row["nonce"]),
-                bytes(row["ciphertext"]),
-                source_id.encode("utf-8"),
-            )
-            result.append(
-                (
-                    int(row["outbox_id"]),
-                    RawInboundEvent.model_validate_json(payload),
+            try:
+                payload = self.cipher.decrypt(
+                    bytes(row["nonce"]),
+                    bytes(row["ciphertext"]),
+                    source_id.encode("utf-8"),
                 )
-            )
+                event = RawInboundEvent.model_validate_json(payload)
+            except (InvalidTag, ValueError) as exc:
+                self.mark_failed(
+                    outbox_id,
+                    f"{type(exc).__name__}: encrypted outbox payload invalid",
+                    permanent=True,
+                )
+                logger.error(
+                    json.dumps(
+                        {
+                            "event": "bridge_outbox_corrupt",
+                            "outbox_id": outbox_id,
+                            "error_type": type(exc).__name__,
+                        },
+                        sort_keys=True,
+                    )
+                )
+                continue
+            result.append((outbox_id, event))
         return result
 
     def mark_sent(self, outbox_id: int) -> None:
@@ -374,8 +390,20 @@ class BridgeDispatcher:
         allowed_hosts: set[str],
         timeout_seconds: float = 10.0,
     ) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", provider):
+            raise BridgeConfigError("bridge provider id is invalid")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", tenant_id):
+            raise BridgeConfigError("bridge tenant id is invalid")
+        if not hmac_secret:
+            raise BridgeConfigError("bridge HMAC secret is empty")
+        validated_endpoint = validate_egress_url(endpoint, allowed_hosts)
+        expected_path = f"/v1/providers/{provider}/events"
+        if urlparse(validated_endpoint).path != expected_path:
+            raise BridgeConfigError(
+                f"BRIDGE_TARGET_URL path must be exactly {expected_path}"
+            )
         self.outbox = outbox
-        self.endpoint = validate_egress_url(endpoint, allowed_hosts)
+        self.endpoint = validated_endpoint
         self.tenant_id = tenant_id
         self.provider = provider
         self.hmac_secret = hmac_secret
@@ -422,7 +450,7 @@ class BridgeDispatcher:
                     permanent=permanent,
                 )
                 failed += 1
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            except httpx.HTTPError as exc:
                 self.outbox.mark_failed(
                     outbox_id,
                     f"{type(exc).__name__}: transport failure",
