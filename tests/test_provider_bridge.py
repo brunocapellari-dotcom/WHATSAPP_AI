@@ -176,7 +176,6 @@ def test_dispatcher_signs_exact_bytes_and_marks_sent(tmp_path: Path, monkeypatch
         return httpx.Response(202)
 
     monkeypatch.setattr(bridge.httpx, "post", fake_post)
-    monkeypatch.setattr(bridge.time, "time", lambda: 1000)
 
     dispatcher = BridgeDispatcher(
         outbox,
@@ -191,7 +190,7 @@ def test_dispatcher_signs_exact_bytes_and_marks_sent(tmp_path: Path, monkeypatch
     body = captured["content"]
     expected = hmac.new(
         b"shared-secret",
-        b"1000." + body,
+        headers["x-webhook-timestamp"].encode("ascii") + b"." + body,
         hashlib.sha256,
     ).hexdigest()
     assert headers["x-tenant-id"] == "freight-prod"
@@ -285,6 +284,7 @@ def test_sent_records_can_be_pruned_without_touching_dead(tmp_path: Path, monkey
     assert len(claimed) == 1
     outbox.mark_sent(claimed[0][0])
 
-    monkeypatch.setattr(bridge.time, "time", lambda: time.time() + 700_000)
+    real_time = time.time
+    monkeypatch.setattr(bridge.time, "time", lambda: real_time() + 700_000)
     assert outbox.prune_sent(604800) == 1
     assert outbox.status_counts()["SENT"] == 0
