@@ -1,0 +1,255 @@
+name: whatsapp-ai-local
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      POSTGRES_DB: whatsapp_ai
+      DB_INGEST_USER: whatsapp_ingest_app
+      DB_INGEST_PASSWORD: ${DB_INGEST_PASSWORD}
+      DB_WORKER_USER: whatsapp_worker_app
+      DB_WORKER_PASSWORD: ${DB_WORKER_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/00-runtime-users.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d whatsapp_ai"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - data_net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["python", "-m", "scripts.release_migrate"]
+    environment:
+      DATABASE_URL_MIGRATOR: postgresql://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/whatsapp_ai
+      WHATSAPP_DB_INGEST_ROLE: whatsapp_ingest_app
+      WHATSAPP_DB_WORKER_ROLE: whatsapp_worker_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - data_net
+    restart: "no"
+
+  ingress:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://whatsapp_ingest_app:${DB_INGEST_PASSWORD}@postgres:5432/whatsapp_ai
+      WHATSAPP_RAW_ENCRYPTION_KEY_B64: ${WHATSAPP_RAW_ENCRYPTION_KEY_B64}
+      WHATSAPP_WEBHOOK_SECRETS: '{"${LOCAL_TENANT_ID}:${LOCAL_PROVIDER_ID}":"${PROVIDER_HMAC_SECRET}"}'
+      WHATSAPP_MAX_WEBHOOK_BYTES: "1000000"
+      ENABLE_DOCS: "0"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - data_net
+      - provider_net
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=2); raise SystemExit(0 if r.status == 200 else 1)"
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  worker:
+    profiles: ["delivery"]
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.worker_daemon"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL_WORKER: postgresql://whatsapp_worker_app:${DB_WORKER_PASSWORD}@postgres:5432/whatsapp_ai
+      WHATSAPP_WORKER_TENANT_ID: ${LOCAL_TENANT_ID}
+      AGROLOG_FREIGHT_INGEST_URL: ${LOCAL_AGROLOG_URL}
+      AGROLOG_SHARED_SECRET: ${AGROLOG_SHARED_SECRET}
+      AGROLOG_EGRESS_ALLOWED_HOSTS: ${LOCAL_AGROLOG_HOST}
+      AGROLOG_ALLOW_PRIVATE_HTTP: "1"
+      WORKER_POLL_SECONDS: "5"
+      OUTBOX_MAX_ATTEMPTS: "8"
+      OUTBOX_CLAIM_TIMEOUT_SECONDS: "300"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - data_net
+      - delivery_net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  bridge:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command:
+      - uvicorn
+      - app.provider_bridge:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8081"
+    restart: unless-stopped
+    environment:
+      BRIDGE_DB_PATH: /data/bridge/outbox.sqlite3
+      BRIDGE_OUTBOX_KEY_B64: ${BRIDGE_OUTBOX_KEY_B64}
+      BRIDGE_TARGET_URL: http://ingress:8080/v1/providers/${LOCAL_PROVIDER_ID}/events
+      BRIDGE_TENANT_ID: ${LOCAL_TENANT_ID}
+      BRIDGE_PROVIDER_ID: ${LOCAL_PROVIDER_ID}
+      BRIDGE_PROVIDER_HMAC_SECRET: ${PROVIDER_HMAC_SECRET}
+      BRIDGE_EGRESS_ALLOWED_HOSTS: ingress
+      BRIDGE_ALLOW_PRIVATE_HTTP: "1"
+      BRIDGE_MAX_ATTEMPTS: "8"
+      BRIDGE_CLAIM_TIMEOUT_SECONDS: "300"
+      BRIDGE_FLUSH_INTERVAL_SECONDS: "5"
+      BRIDGE_SENT_RETENTION_SECONDS: "604800"
+      BRIDGE_MAX_WEBHOOK_BYTES: "5000000"
+      WPP_ALLOWED_SESSIONS: ${WPP_SESSION_NAME}
+    depends_on:
+      ingress:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    volumes:
+      - bridge_data:/data/bridge
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - provider_net
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8081/healthz', timeout=2); raise SystemExit(0 if r.status == 200 else 1)"
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  wppconnect:
+    image: wppconnect/wppconnect-server:sha-c192518
+    entrypoint:
+      - node
+      - /opt/whatsapp-ai/wpp-entrypoint.cjs
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: ${WPP_SECRET_KEY}
+      WPP_LOG_LEVEL: warn
+      PORT: "21465"
+      HOST: "http://127.0.0.1"
+      MANAGER_ENABLED: "false"
+      TOKEN_STORE_TYPE: file
+      CUSTOM_USER_DATA_DIR: /data/userDataDir/
+      WEBHOOK_URL: http://bridge:8081/v1/wppconnect/events
+    ports:
+      - "127.0.0.1:21465:21465"
+    volumes:
+      - ../../provider/wppconnect/wpp-entrypoint.cjs:/opt/whatsapp-ai/wpp-entrypoint.cjs:ro
+      - wpp_tokens:/usr/src/wpp-server/tokens
+      - wpp_userdata:/data/userDataDir
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    cpus: "2.0"
+    pids_limit: 512
+    shm_size: "512m"
+    networks:
+      - provider_net
+    depends_on:
+      bridge:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:21465/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  data_net:
+    driver: bridge
+    internal: true
+  provider_net:
+    driver: bridge
+  delivery_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  bridge_data:
+  wpp_tokens:
+  wpp_userdata:

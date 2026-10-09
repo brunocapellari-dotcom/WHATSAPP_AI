@@ -46,15 +46,19 @@ def main() -> int:
                 )
             )
             cur.execute(
-                sql.SQL("REVOKE cloudsqlsuperuser FROM {}").format(
-                    sql.Identifier(ingest_role)
-                )
+                "SELECT 1 FROM pg_roles WHERE rolname='cloudsqlsuperuser'"
             )
-            cur.execute(
-                sql.SQL("REVOKE cloudsqlsuperuser FROM {}").format(
-                    sql.Identifier(worker_role)
+            if cur.fetchone() is not None:
+                cur.execute(
+                    sql.SQL("REVOKE cloudsqlsuperuser FROM {}").format(
+                        sql.Identifier(ingest_role)
+                    )
                 )
-            )
+                cur.execute(
+                    sql.SQL("REVOKE cloudsqlsuperuser FROM {}").format(
+                        sql.Identifier(worker_role)
+                    )
+                )
         conn.commit()
 
     print(

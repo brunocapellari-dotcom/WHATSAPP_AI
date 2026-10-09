@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import time
@@ -61,14 +62,29 @@ def verify_webhook_signature(
         raise SecurityError("invalid webhook signature")
 
 
-def validate_egress_url(url: str, allowed_hosts: set[str]) -> str:
+def validate_egress_url(
+    url: str,
+    allowed_hosts: set[str],
+    *,
+    allow_private_http: bool = False,
+) -> str:
     parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise SecurityError("egress destination must use HTTPS")
     if not parsed.hostname or parsed.hostname not in allowed_hosts:
         raise SecurityError("egress destination host is not allowlisted")
     if parsed.username or parsed.password:
         raise SecurityError("credentials in destination URL are forbidden")
+    if parsed.scheme == "https":
+        return url
+    if parsed.scheme != "http" or not allow_private_http:
+        raise SecurityError("egress destination must use HTTPS")
+    try:
+        ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        pass
+    else:
+        raise SecurityError("private HTTP egress must use an explicit local service hostname")
+    if parsed.hostname not in {"ingress", "agrolog", "host.docker.internal"}:
+        raise SecurityError("private HTTP egress host is not an approved local service")
     return url
 
 
