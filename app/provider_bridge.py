@@ -26,7 +26,7 @@ from .security import validate_egress_url
 
 logger = logging.getLogger("whatsapp_ai.provider_bridge")
 
-MAX_WPP_BODY_BYTES = int(os.environ.get("BRIDGE_MAX_WEBHOOK_BYTES", "750000"))
+MAX_WPP_BODY_BYTES = int(os.environ.get("BRIDGE_MAX_WEBHOOK_BYTES", "5000000"))
 MAX_RAW_TEXT = 50_000
 MAX_RAW_EVENT_BYTES = 700_000
 ID_RE = re.compile(r"^[A-Za-z0-9._:@-]{1,256}$")
@@ -276,15 +276,19 @@ def _looks_like_media_bytes(value: str) -> bool:
 
 
 def _sanitized_raw_event(payload: dict[str, Any]) -> dict[str, Any]:
-    sanitized = dict(payload)
-    for key in (
+    drop_keys = {
         "mediaKey",
         "directPath",
         "deprecatedMms3Url",
         "clientUrl",
         "uploadhash",
-    ):
-        sanitized.pop(key, None)
+        "chat",
+        "sender",
+        "mediaData",
+        "interactiveAnnotations",
+        "labels",
+    }
+    sanitized = {key: value for key, value in payload.items() if key not in drop_keys}
 
     if bool(payload.get("isMedia") or payload.get("isMMS")):
         body = sanitized.get("body")
@@ -292,10 +296,51 @@ def _sanitized_raw_event(payload: dict[str, Any]) -> dict[str, Any]:
             sanitized["body"] = "[MEDIA_BYTES_REDACTED]"
             sanitized["media_bytes_redacted"] = True
 
-    encoded = json.dumps(sanitized, separators=(",", ":"), default=str).encode("utf-8")
-    if len(encoded) > MAX_RAW_EVENT_BYTES:
-        raise ValueError("sanitized WPPConnect event exceeds bridge raw-event limit")
-    return sanitized
+    encoded = json.dumps(
+        sanitized,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    if len(encoded) <= MAX_RAW_EVENT_BYTES:
+        return sanitized
+
+    original = json.dumps(
+        payload,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    keep = {
+        key: sanitized.get(key)
+        for key in (
+            "event",
+            "session",
+            "id",
+            "type",
+            "timestamp",
+            "t",
+            "from",
+            "to",
+            "author",
+            "notifyName",
+            "isGroupMsg",
+            "isMedia",
+            "isMMS",
+            "fromMe",
+            "mimetype",
+            "filehash",
+            "size",
+            "caption",
+            "quotedMsgId",
+        )
+        if key in sanitized
+    }
+    body = sanitized.get("body")
+    if isinstance(body, str):
+        keep["body"] = body[:MAX_RAW_TEXT]
+    keep["_raw_event_truncated"] = True
+    keep["_raw_event_original_size_bytes"] = len(original)
+    keep["_raw_event_sha256"] = hashlib.sha256(original).hexdigest()
+    return keep
 
 
 def normalize_wppconnect_event(
