@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 SESSION_NAME="${WPP_SESSION_NAME:-freight-prod}"
-[[ "$SESSION_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+[[ "$SESSION_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]] || {
   echo "PAIR_FAIL: invalid WPP_SESSION_NAME" >&2
   exit 2
 }
@@ -39,8 +39,9 @@ trap 'rm -f "$token_cfg" "$token_json" "$start_cfg" "$start_json"; unset secret_
 chmod 600 "$token_cfg" "$token_json" "$start_cfg" "$start_json"
 
 cat >"$token_cfg" <<EOF
-url = "http://127.0.0.1:21465/api/$SESSION_NAME/$secret_key/generate-token"
+url = "http://127.0.0.1:21465/api/manager/sessions/$SESSION_NAME/token"
 request = "POST"
+header = "Authorization: Bearer $secret_key"
 silent
 show-error
 fail-with-body
