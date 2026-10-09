@@ -78,8 +78,8 @@ gcloud run jobs execute "$MIGRATION_JOB_NAME"   --region "$REGION" --project "$P
 gcloud run jobs delete "$MIGRATION_JOB_NAME"   --region "$REGION" --project "$PROJECT_ID" --quiet
 migration_job_created=0
 
-echo "Deploying private ingress service"
-gcloud run deploy "$INGRESS_SERVICE_NAME"   --image "$image"   --region "$REGION"   --project "$PROJECT_ID"   --service-account "$ingress_sa"   --execution-environment gen2   --cpu "$CPU"   --memory "$MEMORY"   --max-instances "$MAX_INSTANCES"   --concurrency "$CONCURRENCY"   --timeout 30s   --ingress all   --no-allow-unauthenticated   --add-cloudsql-instances "$connection_name"   --set-env-vars "ENABLE_DOCS=0,WHATSAPP_MAX_WEBHOOK_BYTES=1000000"   --update-secrets "DATABASE_URL=${DB_INGRESS_SECRET}:latest,WHATSAPP_RAW_ENCRYPTION_KEY_B64=${RAW_KEY_SECRET}:latest,WHATSAPP_WEBHOOK_SECRETS=${WEBHOOK_SECRETS_SECRET}:latest"   --startup-probe "httpGet.path=/readyz,httpGet.port=8080,initialDelaySeconds=1,failureThreshold=10,timeoutSeconds=3,periodSeconds=3"   --readiness-probe "httpGet.path=/readyz,httpGet.port=8080,successThreshold=1,failureThreshold=3,timeoutSeconds=3,periodSeconds=5"   --liveness-probe "httpGet.path=/healthz,httpGet.port=8080,initialDelaySeconds=5,failureThreshold=3,timeoutSeconds=3,periodSeconds=10"   --quiet
+echo "Deploying load-balancer-only ingress service"
+gcloud run deploy "$INGRESS_SERVICE_NAME"   --image "$image"   --region "$REGION"   --project "$PROJECT_ID"   --service-account "$ingress_sa"   --execution-environment gen2   --cpu "$CPU"   --memory "$MEMORY"   --max-instances "$MAX_INSTANCES"   --concurrency "$CONCURRENCY"   --timeout 30s   --ingress internal-and-cloud-load-balancing   --no-default-url   --no-invoker-iam-check   --add-cloudsql-instances "$connection_name"   --set-env-vars "ENABLE_DOCS=0,WHATSAPP_MAX_WEBHOOK_BYTES=1000000"   --update-secrets "DATABASE_URL=${DB_INGRESS_SECRET}:latest,WHATSAPP_RAW_ENCRYPTION_KEY_B64=${RAW_KEY_SECRET}:latest,WHATSAPP_WEBHOOK_SECRETS=${WEBHOOK_SECRETS_SECRET}:latest"   --startup-probe "httpGet.path=/readyz,httpGet.port=8080,initialDelaySeconds=1,failureThreshold=10,timeoutSeconds=3,periodSeconds=3"   --readiness-probe "httpGet.path=/readyz,httpGet.port=8080,successThreshold=1,failureThreshold=3,timeoutSeconds=3,periodSeconds=5"   --liveness-probe "httpGet.path=/healthz,httpGet.port=8080,initialDelaySeconds=5,failureThreshold=3,timeoutSeconds=3,periodSeconds=10"   --quiet
 
 echo "Deploying tenant-scoped outbox worker job"
 gcloud run jobs deploy "$WORKER_JOB_NAME"   --image "$image"   --region "$REGION"   --project "$PROJECT_ID"   --service-account "$worker_sa"   --set-cloudsql-instances "$connection_name"   --update-secrets "DATABASE_URL_WORKER=${DB_WORKER_SECRET}:latest,AGROLOG_SHARED_SECRET=${AGROLOG_SHARED_SECRET_NAME}:latest"   --set-env-vars "^@^WHATSAPP_WORKER_TENANT_ID=${WHATSAPP_WORKER_TENANT_ID}@AGROLOG_FREIGHT_INGEST_URL=${agrolog_url}/v1/freight/events@AGROLOG_OIDC_AUDIENCE=${agrolog_url}@AGROLOG_EGRESS_ALLOWED_HOSTS=${agrolog_host}@OUTBOX_MAX_ATTEMPTS=8@OUTBOX_CLAIM_TIMEOUT_SECONDS=300"   --command python   --args=-m,app.worker   --max-retries 0   --task-timeout 5m   --quiet
@@ -112,11 +112,16 @@ print(f"INGRESS_READY revision={ready}")
 PY
 rm -f "$service_json"
 
-broad_binding="$(gcloud run services get-iam-policy "$INGRESS_SERVICE_NAME"   --region "$REGION" --project "$PROJECT_ID"   --flatten='bindings[].members'   --filter='bindings.role=roles/run.invoker AND (bindings.members=allUsers OR bindings.members=allAuthenticatedUsers)'   --format='value(bindings.members)' | head -n1)"
-if [[ "$broad_binding" == "allUsers" || "$broad_binding" == "allAuthenticatedUsers" ]]; then
-  echo "DEPLOY_FAIL: ingress service has broad public invoker binding" >&2
+ingress_mode="$(gcloud run services describe "$INGRESS_SERVICE_NAME" --region "$REGION" --project "$PROJECT_ID" --format='value(metadata.annotations."run.googleapis.com/ingress")')"
+[[ "$ingress_mode" == "internal-and-cloud-load-balancing" ]] || {
+  echo "DEPLOY_FAIL: ingress mode is not load-balancer-only: $ingress_mode" >&2
   exit 4
-fi
+}
+default_url_disabled="$(gcloud run services describe "$INGRESS_SERVICE_NAME" --region "$REGION" --project "$PROJECT_ID" --format='value(metadata.annotations."run.googleapis.com/default-url-disabled")')"
+[[ "$default_url_disabled" == "true" ]] || {
+  echo "DEPLOY_FAIL: default run.app URL is not disabled" >&2
+  exit 4
+}
 
 trap - EXIT
 echo "WHATSAPP_AI_DEPLOY_PASS"
