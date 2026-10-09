@@ -4,13 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "preflight = read-only; deploy = build/migrate/deploy/smoke"
+        description: "preflight, deploy, or non-destructive restore drill"
         required: true
         default: preflight
         type: choice
         options:
           - preflight
           - deploy
+          - restore-drill
+      confirm_billable_restore_drill:
+        description: "Required only for restore-drill: creates a temporary billable Cloud SQL instance"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -18,28 +24,38 @@ permissions:
 jobs:
   production:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     permissions:
       contents: read
       id-token: write
     env:
       PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      EXPECTED_DEPLOYER_SA: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      DEPLOYER_SA: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      RESTORE_SA: ${{ secrets.GCP_RESTORE_SERVICE_ACCOUNT }}
       BUILD_SERVICE_ACCOUNT: ${{ secrets.GCP_BUILD_SERVICE_ACCOUNT }}
       BUILD_SOURCE_BUCKET: ${{ secrets.GCP_BUILD_SOURCE_BUCKET }}
       WHATSAPP_WORKER_TENANT_ID: ${{ secrets.WHATSAPP_WORKER_TENANT_ID }}
       REGION: southamerica-east1
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 pinned
+        with:
+          persist-credentials: false
 
       - name: Validate GitHub secret references
         shell: bash
         env:
           WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          REQUESTED_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
           missing=0
-          for key in PROJECT_ID EXPECTED_DEPLOYER_SA BUILD_SERVICE_ACCOUNT BUILD_SOURCE_BUCKET WHATSAPP_WORKER_TENANT_ID WIF_PROVIDER; do
+          required=(PROJECT_ID WIF_PROVIDER)
+          if [[ "$REQUESTED_MODE" == "restore-drill" ]]; then
+            required+=(RESTORE_SA)
+          else
+            required+=(DEPLOYER_SA BUILD_SERVICE_ACCOUNT BUILD_SOURCE_BUCKET WHATSAPP_WORKER_TENANT_ID)
+          fi
+          for key in "${required[@]}"; do
             if [ -n "${!key:-}" ]; then
               echo "READY $key"
             else
@@ -49,11 +65,21 @@ jobs:
           done
           exit "$missing"
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3 pinned
+      - name: Authenticate deploy identity
+        if: inputs.mode != 'restore-drill'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3 pinned
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Authenticate dedicated restore identity
+        if: inputs.mode == 'restore-drill'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3 pinned
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_RESTORE_SERVICE_ACCOUNT }}
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3 pinned
         with:
@@ -64,7 +90,10 @@ jobs:
           python-version: "3.12"
 
       - name: GCP preflight
+        if: inputs.mode != 'restore-drill'
         shell: bash
+        env:
+          EXPECTED_DEPLOYER_SA: ${{ secrets.GCP_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
           mkdir -p outputs/gcp-production
@@ -76,6 +105,20 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/deploy_gcp.sh | tee outputs/gcp-production/deploy.txt
+
+      - name: Non-destructive backup/restore drill
+        if: inputs.mode == 'restore-drill'
+        shell: bash
+        env:
+          CONFIRM_BILLABLE_RESTORE_DRILL: ${{ inputs.confirm_billable_restore_drill }}
+        run: |
+          set -euo pipefail
+          mkdir -p outputs/gcp-production
+          if [[ "$CONFIRM_BILLABLE_RESTORE_DRILL" != "true" ]]; then
+            echo "Restore drill requires explicit billable confirmation." >&2
+            exit 2
+          fi
+          ALLOW_BILLABLE_RESTORE_DRILL=1             bash scripts/backup_restore_drill_gcp.sh             | tee outputs/gcp-production/restore-drill.txt
 
       - name: Upload production evidence
         if: always()
