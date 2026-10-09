@@ -5,6 +5,7 @@ import hmac
 
 import pytest
 
+from app.main import _validate_security_identifier
 from app.security import SecurityError, validate_egress_url, verify_webhook_signature
 
 
@@ -34,3 +35,24 @@ def test_egress_allowlist_blocks_ssrf_destination() -> None:
     with pytest.raises(SecurityError):
         validate_egress_url("https://evil.example.com/ingest", {"agrolog.example.com"})
     assert validate_egress_url("https://agrolog.example.com/v1/freight/events", {"agrolog.example.com"})
+
+
+
+@pytest.mark.parametrize(
+    "value,kind",
+    [
+        ("tenant:other", "tenant"),
+        ("tenant/other", "tenant"),
+        (" provider", "provider"),
+        ("provider?", "provider"),
+        ("a" * 65, "provider"),
+    ],
+)
+def test_security_identifiers_reject_ambiguous_or_unsafe_values(value: str, kind: str) -> None:
+    with pytest.raises(Exception):
+        _validate_security_identifier(value, kind=kind)
+
+
+def test_security_identifiers_accept_canonical_values() -> None:
+    assert _validate_security_identifier("tenant-01", kind="tenant") == "tenant-01"
+    assert _validate_security_identifier("wppconnect.prod", kind="provider") == "wppconnect.prod"
