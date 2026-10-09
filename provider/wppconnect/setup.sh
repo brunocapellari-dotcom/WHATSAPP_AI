@@ -17,7 +17,7 @@ fail() {
 
 [[ -n "$PROJECT_ID" ]] || fail "PROJECT_ID is required"
 [[ "$WEBHOOK_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || fail "WEBHOOK_DOMAIN is invalid"
-[[ "$WPP_SESSION_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || fail "WPP_SESSION_NAME is invalid"
+[[ "$WPP_SESSION_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]] || fail "WPP_SESSION_NAME is invalid"
 [[ "$BRIDGE_TENANT_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || fail "BRIDGE_TENANT_ID is invalid"
 [[ "$BRIDGE_PROVIDER_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || fail "BRIDGE_PROVIDER_ID is invalid"
 
