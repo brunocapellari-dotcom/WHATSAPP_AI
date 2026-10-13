@@ -155,6 +155,13 @@ def parse_freight(text: str) -> ParsedFreight:
             company = line.strip("* ")
             break
 
+    if (
+        loading_point
+        and company
+        and normalize_text(loading_point) == normalize_text(company)
+    ):
+        loading_point = None
+
     rate = None
     for line in lines:
         if "R$" in line.upper() or "FRETE" in normalize_text(line):
