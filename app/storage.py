@@ -33,6 +33,7 @@ class InMemoryFreightStore:
         self.raw: list[dict] = []
         self.source_ids: set[tuple[str, str, str]] = set()
         self.events: dict[tuple[str, str], FreightEvent] = {}
+        self.event_versions: dict[tuple[str, str, int], FreightEvent] = {}
         self.outbox: dict[int, FreightEvent] = {}
         self.dead_outbox: dict[int, FreightEvent] = {}
         self.outbox_attempts: dict[int, int] = {}
@@ -63,6 +64,10 @@ class InMemoryFreightStore:
         return rows[:limit]
 
     def save_event(self, event: FreightEvent, logical_key: str) -> None:
+        self.event_versions.setdefault(
+            (event.tenant_id, event.event_id, event.version),
+            event.model_copy(deep=True),
+        )
         self.events[(event.tenant_id, logical_key)] = event
 
     def enqueue_outbox(self, event: FreightEvent) -> None:
@@ -258,6 +263,22 @@ class PostgresFreightStore:
         payload = event.model_dump(mode="json")
         with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
             self._set_tenant(cur, event.tenant_id)
+            cur.execute(
+                """
+                INSERT INTO whatsapp_freight_event_versions
+                (tenant_id, event_id, version, logical_key, payload, observed_at)
+                VALUES (%s,%s,%s,%s,%s::jsonb,%s)
+                ON CONFLICT (tenant_id, event_id, version) DO NOTHING
+                """,
+                (
+                    event.tenant_id,
+                    event.event_id,
+                    event.version,
+                    logical_key,
+                    json.dumps(payload),
+                    event.timestamp,
+                ),
+            )
             cur.execute(
                 """
                 INSERT INTO whatsapp_freight_events (tenant_id, logical_key, event_id, version, payload)
