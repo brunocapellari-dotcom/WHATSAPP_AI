@@ -254,18 +254,38 @@ class FreightPipeline:
         if company:
             entities["company"] = [company]
 
+        actor_identity = _incoming_actor(company, raw)
         key = _logical_key(
             [
                 parsed.product,
                 origin.normalized_value if origin else None,
                 destination.normalized_value if destination else None,
-                company.normalized_value if company else None,
-                parsed.date_text,
+                actor_identity,
+                parsed.rate_unit,
             ]
         )
         previous = self.store.find_logical_event(tenant_id, key)
         match_method = "logical_key" if previous else None
         match_score: int | None = None
+
+        if previous is None and parsed.classification in {
+            FreightClassification.FREIGHT_OFFER,
+            FreightClassification.FREIGHT_REQUEST,
+        }:
+            matched = _find_equivalent_offer_target(
+                self.store,
+                tenant_id,
+                product=parsed.product,
+                origin=origin,
+                destination=destination,
+                actor_identity=actor_identity,
+                rate_unit=parsed.rate_unit,
+            )
+            if matched is not None:
+                key = matched.logical_key
+                previous = matched.event
+                match_method = matched.method
+                match_score = matched.score
 
         if previous is None and parsed.classification in {
             FreightClassification.UPDATE,
@@ -342,6 +362,7 @@ class FreightPipeline:
             "links": parsed.links,
             "provider": provider,
             "source": raw.source,
+            "actor_identity": actor_identity,
             "attachment_count": len(raw.attachments),
             "mutation_match_method": match_method,
             "mutation_match_score": match_score,
@@ -352,12 +373,20 @@ class FreightPipeline:
         version = 1
         event_id = None
         source_ids = [raw.source_event_id]
+        rate_change = None
         if previous:
             event_id = previous.event_id
             version = previous.version
             source_ids = [*previous.source_event_ids, raw.source_event_id]
-            if classification == FreightClassification.FREIGHT_OFFER and previous.rate != event_rate:
-                classification = FreightClassification.UPDATE
+            if classification == FreightClassification.FREIGHT_OFFER and previous.classification in {
+                FreightClassification.FREIGHT_OFFER,
+                FreightClassification.UPDATE,
+            }:
+                if previous.rate != event_rate:
+                    classification = FreightClassification.UPDATE
+                else:
+                    classification = previous.classification
+            rate_change = _build_rate_change(previous, event_rate, raw.message_timestamp)
 
         event = FreightEvent(
             event_id=event_id or str(uuid4()),
@@ -373,6 +402,7 @@ class FreightPipeline:
             entities=entities,
             rate=event_rate,
             rate_unit=event_rate_unit,
+            rate_change=rate_change,
             metadata=metadata,
             confidence=parsed.confidence,
             truth_classification=TruthClassification.OBSERVED,
@@ -383,6 +413,7 @@ class FreightPipeline:
                 "message_timestamp": raw.message_timestamp.isoformat(),
                 "mutation_match_method": match_method,
                 "mutation_match_score": match_score,
+                "actor_identity": actor_identity,
                 "carried_forward_fields": sorted(set(carried_forward_fields)),
             },
         )
