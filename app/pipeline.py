@@ -47,6 +47,11 @@ def _company(event: FreightEvent):
     return values[0] if values else None
 
 
+def _loading_point_entity(event: FreightEvent):
+    values = event.entities.get("loading_point", [])
+    return values[0] if values else None
+
+
 def _incoming_actor(company, raw: RawInboundEvent) -> str:
     if company and company.normalized_value:
         return f"COMPANY:{company.normalized_value}"
@@ -98,6 +103,7 @@ def _find_equivalent_offer_target(
     product: str | None,
     origin,
     destination,
+    loading_point,
     actor_identity: str,
     rate_unit: str | None,
 ) -> MatchContext | None:
@@ -112,6 +118,17 @@ def _find_equivalent_offer_target(
         if normalize_text(event.origin.normalized_value or "") != normalize_text(origin.normalized_value or ""):
             continue
         if normalize_text(event.destination.normalized_value or "") != normalize_text(destination.normalized_value or ""):
+            continue
+        candidate_loading_point = _loading_point_entity(event)
+        incoming_loading_point = (
+            loading_point.normalized_value if loading_point else None
+        )
+        existing_loading_point = (
+            candidate_loading_point.normalized_value
+            if candidate_loading_point
+            else None
+        )
+        if normalize_text(incoming_loading_point or "") != normalize_text(existing_loading_point or ""):
             continue
         if _event_actor(event) != actor_identity:
             continue
@@ -136,10 +153,12 @@ def _mutation_candidate_score(
     origin,
     destination,
     company,
+    loading_point,
     candidate: FreightEvent,
 ) -> int | None:
     score = 0
     candidate_company = _company(candidate)
+    candidate_loading_point = _loading_point_entity(candidate)
 
     comparisons = [
         (parsed.product, candidate.product, 3),
@@ -157,6 +176,11 @@ def _mutation_candidate_score(
             company.normalized_value if company else None,
             candidate_company.normalized_value if candidate_company else None,
             2,
+        ),
+        (
+            loading_point.normalized_value if loading_point else None,
+            candidate_loading_point.normalized_value if candidate_loading_point else None,
+            4,
         ),
         (parsed.phone, candidate.metadata.get("phone"), 2),
         (parsed.date_text, candidate.metadata.get("date_text"), 1),
@@ -180,6 +204,7 @@ def _find_mutation_target(
     origin,
     destination,
     company,
+    loading_point,
     raw: RawInboundEvent,
 ) -> MatchContext | None:
     candidates = store.recent_events(tenant_id, limit=100)
@@ -188,13 +213,27 @@ def _find_mutation_target(
         for logical_key, event in candidates:
             if reply_to not in event.source_event_ids:
                 continue
-            score = _mutation_candidate_score(parsed, origin, destination, company, event)
+            score = _mutation_candidate_score(
+                parsed,
+                origin,
+                destination,
+                company,
+                loading_point,
+                event,
+            )
             if score is not None:
                 return MatchContext(logical_key, event, "reply_source_event", score)
 
     ranked: list[MatchContext] = []
     for logical_key, event in candidates:
-        score = _mutation_candidate_score(parsed, origin, destination, company, event)
+        score = _mutation_candidate_score(
+            parsed,
+            origin,
+            destination,
+            company,
+            loading_point,
+            event,
+        )
         if score is None or score < 6:
             continue
         ranked.append(MatchContext(logical_key, event, "field_match", score))
@@ -238,6 +277,7 @@ class FreightPipeline:
         origin = self.resolver.resolve("municipality", parsed.origin_raw)
         destination = self.resolver.resolve("municipality", parsed.destination_raw)
         company = self.resolver.resolve("company", parsed.company_raw)
+        loading_point = self.resolver.resolve("loading_point", parsed.loading_point_raw)
 
         if parsed.classification in {
             FreightClassification.FREIGHT_OFFER,
@@ -253,6 +293,8 @@ class FreightPipeline:
         entities: dict[str, list] = {}
         if company:
             entities["company"] = [company]
+        if loading_point:
+            entities["loading_point"] = [loading_point]
 
         actor_identity = _incoming_actor(company, raw)
         key = _logical_key(
@@ -260,6 +302,7 @@ class FreightPipeline:
                 parsed.product,
                 origin.normalized_value if origin else None,
                 destination.normalized_value if destination else None,
+                loading_point.normalized_value if loading_point else None,
                 actor_identity,
                 parsed.rate_unit,
             ]
@@ -278,6 +321,7 @@ class FreightPipeline:
                 product=parsed.product,
                 origin=origin,
                 destination=destination,
+                loading_point=loading_point,
                 actor_identity=actor_identity,
                 rate_unit=parsed.rate_unit,
             )
@@ -298,6 +342,7 @@ class FreightPipeline:
                 origin,
                 destination,
                 company,
+                loading_point,
                 raw,
             )
             if matched is None:
@@ -330,6 +375,11 @@ class FreightPipeline:
                 if company:
                     entities["company"] = [company]
                     carried_forward_fields.append("company")
+            if loading_point is None:
+                loading_point = _loading_point_entity(previous)
+                if loading_point:
+                    entities["loading_point"] = [loading_point]
+                    carried_forward_fields.append("loading_point")
             if parsed.rate is None and parsed.classification == FreightClassification.CANCELLATION:
                 event_rate = previous.rate
                 event_rate_unit = previous.rate_unit
