@@ -359,3 +359,12 @@ def test_rate_change_never_crosses_loading_point_boundary() -> None:
     assert second.event.event_id != first.event.event_id
     assert second.event.version == 1
     assert second.event.rate_change is None
+
+
+
+def test_rodoviva_header_is_attributed_to_carrier() -> None:
+    parsed = parse_freight(
+        "RODOVIVA\nFRETE SOJA\nORIGEM: FAZENDA ALFA - SORRISO - MT\n"
+        "DESTINO: RONDONOPOLIS - MT\nR$ 175,00 / T"
+    )
+    assert parsed.company_raw == "RODOVIVA"
