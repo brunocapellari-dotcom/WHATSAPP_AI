@@ -20,8 +20,8 @@ post-release deployment profile.
 | WA-006 | Durable outbox + DLQ | P0 | DONE | local PostgreSQL | bounded retry, stale-claim recovery, DEAD state | CI regression |
 | WA-007 | WPPConnect provider bridge | P0 | DONE | dedicated WhatsApp number | encrypted local bridge outbox, HMAC, dedup, media redaction | provider CI green before merge |
 | WA-008 | Metadata-only attachment boundary | P0 | DONE | none | no unscanned media bytes enter parsing | security regression |
-| WA-009 | Zero-cost local compose | P0 | TESTING | Docker/Compose on existing machine | PostgreSQL + migration + ingress + bridge + WPPConnect start reproducibly | current branch / CI pending |
-| WA-010 | Local backup + restore drill | P0 | TESTING | WA-009 | dump hash validates and temporary restore succeeds | scripts + CI contract pending |
+| WA-009 | Zero-cost local compose | P0 | READY_FOR_LOCAL_EXECUTION | Docker/Compose on existing machine | PostgreSQL + migration + ingress + bridge + WPPConnect start reproducibly | merged in `458437f3`; CI #404 PASS |
+| WA-010 | Local backup + restore drill | P0 | READY_FOR_LOCAL_EXECUTION | WA-009 | dump hash validates and temporary restore succeeds | scripts merged; real local drill pending |
 | WA-011 | Local AgroLog delivery | P0 | READY | AgroLog receiver running locally | signed HMAC delivery over approved local hostname | worker profile implemented |
 | WA-012 | Authorized WhatsApp pairing | P0 | BLOCKED | physical phone / authorized account | dedicated account reaches CONNECTED state | human-only QR scan required |
 | WA-013 | Two-run real E2E | P0 | BLOCKED | WA-009 + WA-012 + local AgroLog | two different freight messages reach AgroLog without code edits | requires local runtime + pairing |

@@ -108,3 +108,24 @@ O restore é feito em um banco temporário e removido ao final. O banco principa
 ## Observação operacional
 
 WPPConnect é automação baseada em WhatsApp Web. Ela evita tarifa de API oficial, mas não oferece a mesma garantia contratual de uma integração oficial da Meta. Use um número dedicado ao projeto.
+
+
+## Windows: caminho mais curto
+
+Abra o PowerShell na raiz do repositório.
+
+Preparar e subir tudo:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy\local\zero-cost.ps1 start
+```
+
+Gerar/abrir o QR para parear o número dedicado:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy\local\zero-cost.ps1 pair
+```
+
+Depois disso, os comandos opcionais são `status`, `backup` e `restore`.
+
+O launcher usa Git Bash quando disponível e, caso contrário, WSL. Secrets e QR continuam somente no computador local.
