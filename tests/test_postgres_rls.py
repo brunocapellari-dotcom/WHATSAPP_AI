@@ -7,7 +7,13 @@ import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from app.models import FreightClassification, FreightEvent, RawInboundEvent
+from app.models import (
+    FreightClassification,
+    FreightEvent,
+    RateChange,
+    RateMovement,
+    RawInboundEvent,
+)
 from app.storage import PostgresFreightStore, RawCipher
 from scripts.migrate import apply_migrations
 
@@ -194,6 +200,15 @@ def test_freight_version_history_is_immutable_and_tenant_scoped(
     event.classification = FreightClassification.UPDATE
     event.rate = 175
     event.timestamp = datetime(2026, 10, 13, 9, 0, tzinfo=UTC)
+    event.rate_change = RateChange(
+        previous_rate=170,
+        current_rate=175,
+        delta=5,
+        delta_percent="2.94",
+        movement=RateMovement.INCREASE,
+        previous_timestamp=datetime(2026, 10, 13, 7, 0, tzinfo=UTC),
+        changed_at=datetime(2026, 10, 13, 9, 0, tzinfo=UTC),
+    )
     event.source_event_ids.append("history-2")
     store.save_event(event, "logical-history")
 
@@ -209,6 +224,17 @@ def test_freight_version_history_is_immutable_and_tenant_scoped(
         )
         assert cur.fetchall() == [(1, "170"), (2, "175")]
 
+        cur.execute(
+            """
+            SELECT rate_previous, rate_current, rate_delta, rate_movement
+            FROM whatsapp_freight_rate_changes
+            WHERE tenant_id='tenant-history'
+            """
+        )
+        assert cur.fetchall() == [(170, 175, 5, "AUMENTO")]
+
         cur.execute("SELECT set_config('app.tenant_id', 'other-tenant', true)")
         cur.execute("SELECT count(*) FROM whatsapp_freight_event_versions")
+        assert cur.fetchone()[0] == 0
+        cur.execute("SELECT count(*) FROM whatsapp_freight_rate_changes")
         assert cur.fetchone()[0] == 0
