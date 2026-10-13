@@ -112,7 +112,11 @@ def parse_freight(text: str) -> ParsedFreight:
     company = None
     for line in lines[:4]:
         n = normalize_text(line)
-        if any(token in n for token in ("TRANSPORT", "LOGIST", "CARGILL", "BUNGE", "ADM", "COFCO")):
+        if (
+            any(token in n for token in ("TRANSPORT", "LOGIST", "CARGILL", "BUNGE", "ADM", "COFCO"))
+            or n == "RODOVIVA"
+            or n.startswith("RODOVIVA ")
+        ):
             company = line.strip("* ")
             break
 
