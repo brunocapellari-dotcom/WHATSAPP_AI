@@ -75,12 +75,45 @@ def _emoji_locations(lines: list[str]) -> tuple[str | None, str | None]:
     return (pins[0] if pins else None, rockets[0] if rockets else None)
 
 
+def _loading_point(lines: list[str], product: str | None) -> str | None:
+    explicit = _value_after_markers(
+        lines,
+        (
+            "LOCAL DE EMBARQUE:",
+            "PONTO DE EMBARQUE:",
+            "EMBARQUE EM:",
+        ),
+    )
+    if explicit:
+        return explicit
+
+    if product is None:
+        return None
+    product_n = normalize_text(product.replace("_", " "))
+    for line in lines:
+        n = normalize_text(line)
+        if product_n not in n:
+            continue
+        if any(token in n for token in ("TRANSPORT", "LOGIST", "CARGAS DISPONIVEIS")):
+            continue
+        cleaned = re.sub(r"^[^\wÀ-ÿ]+", "", line).strip("* ")
+        parts = re.split(r"\s+[—–-]\s+", cleaned, maxsplit=1)
+        if len(parts) != 2:
+            continue
+        candidate = parts[0].strip("* ✅📍")
+        candidate_n = normalize_text(candidate)
+        if candidate_n and candidate_n not in {"FRETE", product_n}:
+            return candidate
+    return None
+
+
 @dataclass(frozen=True)
 class ParsedFreight:
     classification: FreightClassification
     product: str | None
     origin_raw: str | None
     destination_raw: str | None
+    loading_point_raw: str | None
     company_raw: str | None
     rate: Decimal | None
     rate_unit: str | None
@@ -109,12 +142,25 @@ def parse_freight(text: str) -> ParsedFreight:
     origin = origin or emoji_origin
     destination = destination or emoji_destination
 
+    loading_point = _loading_point(lines, product)
+
     company = None
     for line in lines[:4]:
         n = normalize_text(line)
-        if any(token in n for token in ("TRANSPORT", "LOGIST", "CARGILL", "BUNGE", "ADM", "COFCO")):
+        if (
+            any(token in n for token in ("TRANSPORT", "LOGIST", "CARGILL", "BUNGE", "ADM", "COFCO"))
+            or n == "RODOVIVA"
+            or n.startswith("RODOVIVA ")
+        ):
             company = line.strip("* ")
             break
+
+    if (
+        loading_point
+        and company
+        and normalize_text(loading_point) == normalize_text(company)
+    ):
+        loading_point = None
 
     rate = None
     for line in lines:
@@ -151,6 +197,7 @@ def parse_freight(text: str) -> ParsedFreight:
         product=product,
         origin_raw=origin,
         destination_raw=destination,
+        loading_point_raw=loading_point,
         company_raw=company,
         rate=rate,
         rate_unit=rate_unit,

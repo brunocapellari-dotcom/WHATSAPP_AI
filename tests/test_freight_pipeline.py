@@ -1,20 +1,26 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 
-from app.models import FreightClassification, RawInboundEvent
+from app.models import FreightClassification, RateMovement, RawInboundEvent
 from app.parser import classify_message, parse_freight
 from app.pipeline import FreightPipeline
 from app.storage import InMemoryFreightStore
 
 
-def raw(source_event_id: str, text: str, metadata: dict | None = None) -> RawInboundEvent:
+def raw(
+    source_event_id: str,
+    text: str,
+    metadata: dict | None = None,
+    timestamp: datetime | None = None,
+) -> RawInboundEvent:
     return RawInboundEvent(
         source_event_id=source_event_id,
         source="authorized-test-channel",
-        message_timestamp=datetime(2026, 10, 7, 12, 0, tzinfo=UTC),
+        message_timestamp=timestamp or datetime(2026, 10, 7, 12, 0, tzinfo=UTC),
         raw_text=text,
         raw_event={"fixture": True},
         metadata=metadata or {},
@@ -96,14 +102,25 @@ def test_changed_copy_is_logical_repost() -> None:
 def test_rate_change_becomes_update_and_new_version() -> None:
     store = InMemoryFreightStore()
     pipeline = FreightPipeline(store)
-    first = pipeline.ingest("tenant-a", "fixture", raw("m1", COMPLETE))
-    second = pipeline.ingest("tenant-a", "fixture", raw("m2", COMPLETE.replace("155,00", "165,00")))
+    seven = datetime(2026, 10, 13, 7, 0, tzinfo=UTC)
+    nine = datetime(2026, 10, 13, 9, 0, tzinfo=UTC)
+    first = pipeline.ingest("tenant-a", "fixture", raw("m1", COMPLETE.replace("155,00", "170,00"), timestamp=seven))
+    second = pipeline.ingest("tenant-a", "fixture", raw("m2", COMPLETE.replace("155,00", "175,00"), timestamp=nine))
     assert first.event and second.event
     assert second.event.event_id == first.event.event_id
     assert second.event.version == 2
     assert second.event.classification == FreightClassification.UPDATE
-    assert second.event.rate == 165
+    assert second.event.rate == 175
+    assert second.event.rate_change is not None
+    assert second.event.rate_change.previous_rate == 170
+    assert second.event.rate_change.current_rate == 175
+    assert second.event.rate_change.delta == 5
+    assert second.event.rate_change.delta_percent == Decimal("2.94")
+    assert second.event.rate_change.movement == RateMovement.INCREASE
+    assert second.event.rate_change.previous_timestamp == seven
+    assert second.event.rate_change.changed_at == nine
     assert len(store.outbox) == 2
+    assert len(store.event_versions) == 2
 
 
 def test_short_cancellation_matches_existing_route() -> None:
@@ -271,3 +288,121 @@ def test_prompt_injection_is_data_not_instruction() -> None:
     assert result.event is not None
     assert result.event.product == "SOJA"
     assert len(store.outbox) == 1
+
+
+
+def test_rate_decrease_is_explicitly_classified() -> None:
+    store = InMemoryFreightStore()
+    pipeline = FreightPipeline(store)
+    first = pipeline.ingest("tenant-a", "fixture", raw("d1", COMPLETE.replace("155,00", "175,00")))
+    second = pipeline.ingest("tenant-a", "fixture", raw("d2", COMPLETE.replace("155,00", "168,00")))
+    assert first.event and second.event and second.event.rate_change
+    assert second.event.rate_change.movement == RateMovement.DECREASE
+    assert second.event.rate_change.delta == -7
+    assert second.event.rate_change.delta_percent == Decimal("-4.00")
+
+
+def test_same_rate_after_update_is_repost_not_fake_new_version() -> None:
+    store = InMemoryFreightStore()
+    pipeline = FreightPipeline(store)
+    first = pipeline.ingest("tenant-a", "fixture", raw("r1", COMPLETE.replace("155,00", "170,00")))
+    changed = pipeline.ingest("tenant-a", "fixture", raw("r2", COMPLETE.replace("155,00", "175,00")))
+    repeated = pipeline.ingest("tenant-a", "fixture", raw("r3", COMPLETE.replace("155,00", "175,00")))
+    assert first.event and changed.event and repeated.event
+    assert repeated.status == "LOGICAL_REPOST"
+    assert repeated.event.version == 2
+    assert repeated.event.rate_change == changed.event.rate_change
+    assert len(store.outbox) == 2
+    assert len(store.event_versions) == 2
+
+
+def test_publication_date_does_not_split_same_freight_identity() -> None:
+    store = InMemoryFreightStore()
+    pipeline = FreightPipeline(store)
+    first = pipeline.ingest(
+        "tenant-a",
+        "fixture",
+        raw("date1", COMPLETE.replace("07/10/2026", "13/10/2026").replace("155,00", "170,00")),
+    )
+    second = pipeline.ingest(
+        "tenant-a",
+        "fixture",
+        raw("date2", COMPLETE.replace("07/10/2026", "14/10/2026").replace("155,00", "175,00")),
+    )
+    assert first.event and second.event
+    assert second.event.event_id == first.event.event_id
+    assert second.event.version == 2
+    assert second.event.rate_change is not None
+    assert second.event.rate_change.delta == 5
+
+
+def test_rate_change_never_crosses_carrier_boundary() -> None:
+    store = InMemoryFreightStore()
+    pipeline = FreightPipeline(store)
+    rodoviva = COMPLETE.replace("RODOMAX TRANSPORTES", "RODOVIVA TRANSPORTES").replace("155,00", "170,00")
+    borgno = COMPLETE.replace("RODOMAX TRANSPORTES", "BORGNO TRANSPORTES").replace("155,00", "175,00")
+    first = pipeline.ingest("tenant-a", "fixture", raw("carrier1", rodoviva))
+    second = pipeline.ingest("tenant-a", "fixture", raw("carrier2", borgno))
+    assert first.event and second.event
+    assert second.event.event_id != first.event.event_id
+    assert second.event.version == 1
+    assert second.event.rate_change is None
+
+
+def test_rate_change_never_crosses_loading_point_boundary() -> None:
+    store = InMemoryFreightStore()
+    pipeline = FreightPipeline(store)
+    point_a = COMPLETE.replace("LUCAS DO RIO VERDE - MT", "FAZENDA ALFA - LUCAS DO RIO VERDE - MT").replace("155,00", "170,00")
+    point_b = COMPLETE.replace("LUCAS DO RIO VERDE - MT", "FAZENDA BETA - LUCAS DO RIO VERDE - MT").replace("155,00", "175,00")
+    first = pipeline.ingest("tenant-a", "fixture", raw("point1", point_a))
+    second = pipeline.ingest("tenant-a", "fixture", raw("point2", point_b))
+    assert first.event and second.event
+    assert second.event.event_id != first.event.event_id
+    assert second.event.version == 1
+    assert second.event.rate_change is None
+
+
+
+def test_rodoviva_header_is_attributed_to_carrier() -> None:
+    parsed = parse_freight(
+        "RODOVIVA\nFRETE SOJA\nORIGEM: FAZENDA ALFA - SORRISO - MT\n"
+        "DESTINO: RONDONOPOLIS - MT\nR$ 175,00 / T"
+    )
+    assert parsed.company_raw == "RODOVIVA"
+
+
+
+CARGILL_ARMAZEM = """CARGILL TRANSPORTES
+✅ Armazém Cargill — SOJA
+📍 Origem: Sinop
+➡️ Rondonópolis/MT
+R$ 170,00 / T
+"""
+
+CARGILL_C_VALE = """CARGILL TRANSPORTES
+✅ C Vale — SOJA
+📍 Origem: Sinop
+➡️ Rondonópolis/MT
+R$ 175,00 / T
+"""
+
+
+def test_loading_point_is_extracted_separately_from_municipality() -> None:
+    parsed = parse_freight(CARGILL_ARMAZEM)
+    assert parsed.origin_raw == "Sinop"
+    assert parsed.loading_point_raw == "Armazém Cargill"
+    assert parsed.destination_raw == "Rondonópolis/MT"
+
+
+def test_same_carrier_city_destination_but_different_loading_point_never_merges() -> None:
+    store = InMemoryFreightStore()
+    pipeline = FreightPipeline(store)
+    first = pipeline.ingest("tenant-a", "fixture", raw("lp1", CARGILL_ARMAZEM))
+    second = pipeline.ingest("tenant-a", "fixture", raw("lp2", CARGILL_C_VALE))
+    assert first.event and second.event
+    assert first.event.origin and second.event.origin
+    assert first.event.origin.normalized_value == second.event.origin.normalized_value
+    assert first.event.event_id != second.event.event_id
+    assert first.event.entities["loading_point"][0].normalized_value == "ARMAZEM CARGILL"
+    assert second.event.entities["loading_point"][0].normalized_value == "C VALE"
+    assert second.event.rate_change is None

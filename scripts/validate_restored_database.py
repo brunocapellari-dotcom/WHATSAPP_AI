@@ -12,12 +12,14 @@ REQUIRED_TABLES = {
     "whatsapp_schema_migrations",
     "whatsapp_raw_events",
     "whatsapp_freight_events",
+    "whatsapp_freight_event_versions",
     "whatsapp_processed_source_events",
     "whatsapp_agrolog_outbox",
 }
 RLS_TABLES = {
     "whatsapp_raw_events",
     "whatsapp_freight_events",
+    "whatsapp_freight_event_versions",
     "whatsapp_processed_source_events",
     "whatsapp_agrolog_outbox",
 }
@@ -106,6 +108,7 @@ def main() -> int:
             SELECT
               (SELECT count(*) FROM whatsapp_raw_events),
               (SELECT count(*) FROM whatsapp_freight_events),
+              (SELECT count(*) FROM whatsapp_freight_event_versions),
               (SELECT count(*) FROM whatsapp_processed_source_events),
               (SELECT count(*) FROM whatsapp_agrolog_outbox)
             """
@@ -113,13 +116,14 @@ def main() -> int:
         row = cur.fetchone()
         if row is None:
             raise RuntimeError("restored table count query returned no row")
-        raw_count, freight_count, processed_count, outbox_count = row
+        raw_count, freight_count, history_count, processed_count, outbox_count = row
 
     print(
         "RESTORE_VALIDATION_PASS "
         f"migrations={len(expected)} "
         f"raw_rows={int(raw_count)} "
         f"freight_rows={int(freight_count)} "
+        f"history_rows={int(history_count)} "
         f"processed_rows={int(processed_count)} "
         f"outbox_rows={int(outbox_count)}"
     )

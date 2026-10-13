@@ -33,10 +33,10 @@ cat "$backup" | docker compose --env-file .env exec -T postgres \
 
 tables="$(docker compose --env-file .env exec -T postgres \
   psql -U postgres -d "$drill_db" -Atc \
-  "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('whatsapp_raw_events','whatsapp_freight_events','whatsapp_processed_source_events','whatsapp_agrolog_outbox','whatsapp_schema_migrations');")"
+  "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('whatsapp_raw_events','whatsapp_freight_events','whatsapp_freight_event_versions','whatsapp_processed_source_events','whatsapp_agrolog_outbox','whatsapp_schema_migrations');")"
 
-[[ "$tables" == "5" ]] || {
-  echo "LOCAL_RESTORE_FAIL: expected 5 critical tables, got $tables" >&2
+[[ "$tables" == "6" ]] || {
+  echo "LOCAL_RESTORE_FAIL: expected 6 critical tables, got $tables" >&2
   exit 3
 }
 

@@ -7,7 +7,13 @@ import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from app.models import FreightClassification, FreightEvent, RawInboundEvent
+from app.models import (
+    FreightClassification,
+    FreightEvent,
+    RateChange,
+    RateMovement,
+    RawInboundEvent,
+)
 from app.storage import PostgresFreightStore, RawCipher
 from scripts.migrate import apply_migrations
 
@@ -32,7 +38,13 @@ def database_roles() -> tuple[str, str]:
     assert ADMIN_URL is not None
     applied = apply_migrations(ADMIN_URL)
     assert set(applied).issubset(
-        {"001_core.sql", "002_rls.sql", "003_upgrade_existing.sql", "004_scope_worker_tenant.sql"}
+        {
+            "001_core.sql",
+            "002_rls.sql",
+            "003_upgrade_existing.sql",
+            "004_scope_worker_tenant.sql",
+            "005_freight_event_history.sql",
+        }
     )
     assert apply_migrations(ADMIN_URL) == []
 
@@ -164,3 +176,65 @@ def test_ingress_readiness_uses_rls_scoped_table_access(
     ingestor_url, _ = database_roles
     store = PostgresFreightStore(ingestor_url, RawCipher(b"2" * 32))
     store.readiness_check()
+
+
+
+def test_freight_version_history_is_immutable_and_tenant_scoped(
+    database_roles: tuple[str, str],
+) -> None:
+    ingestor_url, _ = database_roles
+    store = PostgresFreightStore(ingestor_url, RawCipher(b"3" * 32))
+    event = FreightEvent(
+        tenant_id="tenant-history",
+        classification=FreightClassification.FREIGHT_OFFER,
+        source_event_ids=["history-1"],
+        raw_reference="postgres://raw/history-1",
+        timestamp=datetime(2026, 10, 13, 7, 0, tzinfo=UTC),
+        product="SOJA",
+        rate=170,
+        rate_unit="BRL/t",
+        confidence=0.9,
+    )
+    store.save_event(event, "logical-history")
+    event.version = 2
+    event.classification = FreightClassification.UPDATE
+    event.rate = 175
+    event.timestamp = datetime(2026, 10, 13, 9, 0, tzinfo=UTC)
+    event.rate_change = RateChange(
+        previous_rate=170,
+        current_rate=175,
+        delta=5,
+        delta_percent="2.94",
+        movement=RateMovement.INCREASE,
+        previous_timestamp=datetime(2026, 10, 13, 7, 0, tzinfo=UTC),
+        changed_at=datetime(2026, 10, 13, 9, 0, tzinfo=UTC),
+    )
+    event.source_event_ids.append("history-2")
+    store.save_event(event, "logical-history")
+
+    with psycopg.connect(ingestor_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT set_config('app.tenant_id', 'tenant-history', true)")
+        cur.execute(
+            """
+            SELECT version, payload->>'rate'
+            FROM whatsapp_freight_event_versions
+            WHERE tenant_id='tenant-history'
+            ORDER BY version
+            """
+        )
+        assert cur.fetchall() == [(1, "170"), (2, "175")]
+
+        cur.execute(
+            """
+            SELECT rate_previous, rate_current, rate_delta, rate_movement
+            FROM whatsapp_freight_rate_changes
+            WHERE tenant_id='tenant-history'
+            """
+        )
+        assert cur.fetchall() == [(170, 175, 5, "AUMENTO")]
+
+        cur.execute("SELECT set_config('app.tenant_id', 'other-tenant', true)")
+        cur.execute("SELECT count(*) FROM whatsapp_freight_event_versions")
+        assert cur.fetchone()[0] == 0
+        cur.execute("SELECT count(*) FROM whatsapp_freight_rate_changes")
+        assert cur.fetchone()[0] == 0
