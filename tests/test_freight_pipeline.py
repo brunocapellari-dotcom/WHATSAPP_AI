@@ -369,3 +369,40 @@ def test_rodoviva_header_is_attributed_to_carrier() -> None:
         "DESTINO: RONDONOPOLIS - MT\nR$ 175,00 / T"
     )
     assert parsed.company_raw == "RODOVIVA"
+
+
+
+CARGILL_ARMAZEM = """CARGILL TRANSPORTES
+✅ Armazém Cargill — SOJA
+📍 Origem: Sinop
+➡️ Rondonópolis/MT
+R$ 170,00 / T
+"""
+
+CARGILL_C_VALE = """CARGILL TRANSPORTES
+✅ C Vale — SOJA
+📍 Origem: Sinop
+➡️ Rondonópolis/MT
+R$ 175,00 / T
+"""
+
+
+def test_loading_point_is_extracted_separately_from_municipality() -> None:
+    parsed = parse_freight(CARGILL_ARMAZEM)
+    assert parsed.origin_raw == "Sinop"
+    assert parsed.loading_point_raw == "Armazém Cargill"
+    assert parsed.destination_raw == "Rondonópolis/MT"
+
+
+def test_same_carrier_city_destination_but_different_loading_point_never_merges() -> None:
+    store = InMemoryFreightStore()
+    pipeline = FreightPipeline(store)
+    first = pipeline.ingest("tenant-a", "fixture", raw("lp1", CARGILL_ARMAZEM))
+    second = pipeline.ingest("tenant-a", "fixture", raw("lp2", CARGILL_C_VALE))
+    assert first.event and second.event
+    assert first.event.origin and second.event.origin
+    assert first.event.origin.normalized_value == second.event.origin.normalized_value
+    assert first.event.event_id != second.event.event_id
+    assert first.event.entities["loading_point"][0].normalized_value == "ARMAZEM CARGILL"
+    assert second.event.entities["loading_point"][0].normalized_value == "C VALE"
+    assert second.event.rate_change is None
