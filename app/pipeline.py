@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_HALF_UP
 from uuid import uuid4
 
 from .models import (
@@ -10,6 +11,8 @@ from .models import (
     FreightEvent,
     IngestionResult,
     RawInboundEvent,
+    RateChange,
+    RateMovement,
     TruthClassification,
 )
 from .parser import EntityResolver, ParsedFreight, normalize_text, parse_freight
@@ -42,6 +45,82 @@ def _semantic_signature(event: FreightEvent) -> str:
 def _company(event: FreightEvent):
     values = event.entities.get("company", [])
     return values[0] if values else None
+
+
+def _incoming_actor(company, raw: RawInboundEvent) -> str:
+    if company and company.normalized_value:
+        return f"COMPANY:{company.normalized_value}"
+    for field in ("author", "from", "notify_name"):
+        value = raw.metadata.get(field)
+        if isinstance(value, str) and value.strip():
+            return f"SENDER:{normalize_text(value)}"
+    return f"SOURCE:{normalize_text(raw.source)}"
+
+
+def _event_actor(event: FreightEvent) -> str:
+    company = _company(event)
+    if company and company.normalized_value:
+        return f"COMPANY:{company.normalized_value}"
+    value = event.metadata.get("actor_identity")
+    if isinstance(value, str) and value:
+        return value
+    return f"SOURCE:{normalize_text(str(event.metadata.get('source') or ''))}"
+
+
+def _build_rate_change(
+    previous: FreightEvent,
+    current_rate: Decimal | None,
+    changed_at,
+) -> RateChange | None:
+    if previous.rate is None or current_rate is None or previous.rate == current_rate:
+        return previous.rate_change
+    delta = current_rate - previous.rate
+    delta_percent = None
+    if previous.rate != 0:
+        delta_percent = (
+            (delta / previous.rate) * Decimal("100")
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return RateChange(
+        previous_rate=previous.rate,
+        current_rate=current_rate,
+        delta=delta,
+        delta_percent=delta_percent,
+        movement=RateMovement.INCREASE if delta > 0 else RateMovement.DECREASE,
+        previous_timestamp=previous.timestamp,
+        changed_at=changed_at,
+    )
+
+
+def _find_equivalent_offer_target(
+    store: FreightStore,
+    tenant_id: str,
+    *,
+    product: str | None,
+    origin,
+    destination,
+    actor_identity: str,
+    rate_unit: str | None,
+) -> MatchContext | None:
+    if not product or origin is None or destination is None:
+        return None
+    matches: list[MatchContext] = []
+    for logical_key, event in store.recent_events(tenant_id, limit=100):
+        if event.product != product:
+            continue
+        if not event.origin or not event.destination:
+            continue
+        if normalize_text(event.origin.normalized_value or "") != normalize_text(origin.normalized_value or ""):
+            continue
+        if normalize_text(event.destination.normalized_value or "") != normalize_text(destination.normalized_value or ""):
+            continue
+        if _event_actor(event) != actor_identity:
+            continue
+        if rate_unit and event.rate_unit and rate_unit != event.rate_unit:
+            continue
+        matches.append(MatchContext(logical_key, event, "stable_identity_match", 100))
+    if len(matches) != 1:
+        return None
+    return matches[0]
 
 
 @dataclass(frozen=True)
