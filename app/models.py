@@ -6,7 +6,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def utc_now() -> datetime:
@@ -45,6 +45,22 @@ class RateChange(BaseModel):
     movement: RateMovement
     previous_timestamp: datetime
     changed_at: datetime
+
+    @model_validator(mode="after")
+    def validate_consistency(self) -> RateChange:
+        expected_delta = self.current_rate - self.previous_rate
+        if expected_delta == 0:
+            raise ValueError("rate change must change the advertised rate")
+        if self.delta != expected_delta:
+            raise ValueError("rate change delta is inconsistent")
+        expected_movement = (
+            RateMovement.INCREASE if expected_delta > 0 else RateMovement.DECREASE
+        )
+        if self.movement != expected_movement:
+            raise ValueError("rate change movement is inconsistent")
+        if self.changed_at < self.previous_timestamp:
+            raise ValueError("rate change timestamp precedes previous observation")
+        return self
 
 
 class AttachmentMetadata(BaseModel):
@@ -103,6 +119,12 @@ class FreightEvent(BaseModel):
     @classmethod
     def unique_source_ids(cls, values: list[str]) -> list[str]:
         return list(dict.fromkeys(values))
+
+    @model_validator(mode="after")
+    def validate_rate_change_matches_current_rate(self) -> FreightEvent:
+        if self.rate_change is not None and self.rate != self.rate_change.current_rate:
+            raise ValueError("rate_change current_rate must match event rate")
+        return self
 
 
 class IngestionResult(BaseModel):
