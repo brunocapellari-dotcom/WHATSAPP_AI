@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 
@@ -114,7 +115,7 @@ def test_rate_change_becomes_update_and_new_version() -> None:
     assert second.event.rate_change.previous_rate == 170
     assert second.event.rate_change.current_rate == 175
     assert second.event.rate_change.delta == 5
-    assert second.event.rate_change.delta_percent == pytest.approx(2.94)
+    assert second.event.rate_change.delta_percent == Decimal("2.94")
     assert second.event.rate_change.movement == RateMovement.INCREASE
     assert second.event.rate_change.previous_timestamp == seven
     assert second.event.rate_change.changed_at == nine
@@ -298,7 +299,7 @@ def test_rate_decrease_is_explicitly_classified() -> None:
     assert first.event and second.event and second.event.rate_change
     assert second.event.rate_change.movement == RateMovement.DECREASE
     assert second.event.rate_change.delta == -7
-    assert second.event.rate_change.delta_percent == pytest.approx(-4.00)
+    assert second.event.rate_change.delta_percent == Decimal("-4.00")
 
 
 def test_same_rate_after_update_is_repost_not_fake_new_version() -> None:
