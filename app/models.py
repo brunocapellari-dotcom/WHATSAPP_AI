@@ -30,6 +30,23 @@ class TruthClassification(StrEnum):
     EXTERNALLY_CONFIRMED = "CONFIRMADO_EXTERNAMENTE"
 
 
+class RateMovement(StrEnum):
+    INCREASE = "AUMENTO"
+    DECREASE = "REDUCAO"
+
+
+class RateChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    previous_rate: Decimal = Field(ge=0)
+    current_rate: Decimal = Field(ge=0)
+    delta: Decimal
+    delta_percent: Decimal | None = None
+    movement: RateMovement
+    previous_timestamp: datetime
+    changed_at: datetime
+
+
 class AttachmentMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -76,6 +93,7 @@ class FreightEvent(BaseModel):
     entities: dict[str, list[EntityValue]] = Field(default_factory=dict)
     rate: Decimal | None = None
     rate_unit: str | None = None
+    rate_change: RateChange | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     truth_classification: TruthClassification = TruthClassification.OBSERVED
