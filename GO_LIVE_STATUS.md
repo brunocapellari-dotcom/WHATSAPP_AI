@@ -23,7 +23,7 @@ post-release deployment profile.
 | WA-009 | Zero-cost local compose | P0 | READY_FOR_LOCAL_EXECUTION | Docker/Compose on existing machine | PostgreSQL + migration + ingress + bridge + WPPConnect start reproducibly | merged in `458437f3`; CI #404 PASS |
 | WA-010 | Local backup + restore drill | P0 | READY_FOR_LOCAL_EXECUTION | WA-009 | dump hash validates and temporary restore succeeds | scripts merged; real local drill pending |
 | WA-011 | Local AgroLog delivery | P0 | READY | AgroLog receiver running locally | signed HMAC delivery over approved local hostname | worker profile implemented |
-| WA-012 | Authorized WhatsApp pairing | P0 | BLOCKED | physical phone / authorized account | dedicated account reaches CONNECTED state | human-only QR scan required |
+| WA-012 | Authorized WhatsApp pairing | P0 | HUMAN_ACTION | dedicated number selected | dedicated account reaches CONNECTED state | only QR scan remains; phone number is not stored in Git |
 | WA-013 | Two-run real E2E | P0 | BLOCKED | WA-009 + WA-012 + local AgroLog | two different freight messages reach AgroLog without code edits | requires local runtime + pairing |
 | WA-014 | Paid GCP deployment | P2 | POST_GO_LIVE | optional budget | cloud profile remains reproducible | not required for zero-cost launch |
 
