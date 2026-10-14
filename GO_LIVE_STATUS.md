@@ -1,6 +1,6 @@
 # GO-LIVE STATUS — WhatsApp AI
 
-Updated: 2026-10-09
+Updated: 2026-10-14
 
 ## Official release target
 
@@ -20,9 +20,9 @@ post-release deployment profile.
 | WA-006 | Durable outbox + DLQ | P0 | DONE | local PostgreSQL | bounded retry, stale-claim recovery, DEAD state | CI regression |
 | WA-007 | WPPConnect provider bridge | P0 | DONE | dedicated WhatsApp number | encrypted local bridge outbox, HMAC, dedup, media redaction | provider CI green before merge |
 | WA-008 | Metadata-only attachment boundary | P0 | DONE | none | no unscanned media bytes enter parsing | security regression |
-| WA-009 | Zero-cost local compose | P0 | READY_FOR_LOCAL_EXECUTION | Docker/Compose on existing machine | PostgreSQL + migration + ingress + bridge + WPPConnect start reproducibly | merged in `458437f3`; CI #404 PASS |
-| WA-010 | Local backup + restore drill | P0 | READY_FOR_LOCAL_EXECUTION | WA-009 | dump hash validates and temporary restore succeeds | scripts merged; real local drill pending |
-| WA-011 | Local AgroLog delivery | P0 | READY | AgroLog receiver running locally | signed HMAC delivery over approved local hostname | worker profile implemented |
+| WA-009 | Zero-cost local compose | P0 | TESTED (agent container, not operator machine) | Docker/Compose on existing machine | PostgreSQL + migration + ingress + bridge + WPPConnect start reproducibly | 2026-10-14: `setup.sh` + `start.sh` → `LOCAL_START_PASS`, 6 migrations applied, ingress/bridge/wppconnect healthy (unpaired); operator-machine run still pending |
+| WA-010 | Local backup + restore drill | P0 | TESTED (agent container, synthetic data) | WA-009 | dump hash validates and temporary restore succeeds | 2026-10-14: `backup.sh` + `restore-drill.sh` → `LOCAL_RESTORE_DRILL_PASS` (sha256 verified, 6/6 migrations match repo, RLS forced on 5/5 tables, temp DB dropped); corrupted/unhashed dumps rejected. Repeat on operator machine with real data |
+| WA-011 | Local AgroLog delivery | P0 | PARTIAL | AgroLog receiver running locally + BigQuery for persistence | signed HMAC delivery over approved local hostname | 2026-10-14: worker → AgroLog receiver (unmodified) over `host.docker.internal`: valid HMAC accepted up to persistence; wrong secret/tampered/stale/unsigned → 401, wrong idempotency key → 400; outbox stays PENDING with backoff on 502 (never false SENT). Persistence BLOCKED: AgroLog receiver writes only to BigQuery (no zero-cost sink); BigQuery emulator cannot run the canonical MERGE |
 | WA-012 | Authorized WhatsApp pairing | P0 | HUMAN_ACTION | dedicated number selected | dedicated account reaches CONNECTED state | only QR scan remains; phone number is not stored in Git |
 | WA-013 | Two-run real E2E | P0 | BLOCKED | WA-009 + WA-012 + local AgroLog | two different freight messages reach AgroLog without code edits | requires local runtime + pairing |
 | WA-014 | Paid GCP deployment | P2 | POST_GO_LIVE | optional budget | cloud profile remains reproducible | not required for zero-cost launch |

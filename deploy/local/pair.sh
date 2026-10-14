@@ -54,7 +54,7 @@ trap 'rm -f "$token_cfg" "$token_json" "$start_cfg" "$start_json"; unset secret_
 chmod 600 "$token_cfg" "$token_json" "$start_cfg" "$start_json"
 
 cat >"$token_cfg" <<EOF
-url = "http://127.0.0.1:21465/api/manager/sessions/$session_name/token"
+url = "http://127.0.0.1:${LOCAL_WPP_PORT:-21465}/api/manager/sessions/$session_name/token"
 request = "POST"
 header = "Authorization: Bearer $secret_key"
 silent
@@ -77,7 +77,7 @@ PY
 )"
 
 cat >"$start_cfg" <<EOF
-url = "http://127.0.0.1:21465/api/$session_name/start-session"
+url = "http://127.0.0.1:${LOCAL_WPP_PORT:-21465}/api/$session_name/start-session"
 request = "POST"
 header = "Accept: application/json"
 header = "Content-Type: application/json"

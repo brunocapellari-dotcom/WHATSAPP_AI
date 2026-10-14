@@ -33,12 +33,12 @@ docker compose --env-file .env run --rm migrate
 docker compose --env-file .env up -d ingress bridge wppconnect
 
 for _ in $(seq 1 30); do
-  if curl --silent --show-error --fail --max-time 2     http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+  if curl --silent --show-error --fail --max-time 2     http://127.0.0.1:${LOCAL_INGRESS_PORT:-8080}/healthz >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
-curl --silent --show-error --fail --max-time 2   http://127.0.0.1:8080/readyz >/dev/null   || fail "WhatsApp AI ingress is not ready"
+curl --silent --show-error --fail --max-time 2   http://127.0.0.1:${LOCAL_INGRESS_PORT:-8080}/readyz >/dev/null   || fail "WhatsApp AI ingress is not ready"
 
 if [[ "${ENABLE_LOCAL_AGROLOG_DELIVERY:-0}" == "1" ]]; then
   docker compose --env-file .env --profile delivery up -d worker
@@ -50,6 +50,6 @@ else
 fi
 
 echo "LOCAL_START_PASS"
-echo "ingress=http://127.0.0.1:8080 (localhost only)"
-echo "wppconnect=http://127.0.0.1:21465 (localhost only)"
+echo "ingress=http://127.0.0.1:${LOCAL_INGRESS_PORT:-8080} (localhost only)"
+echo "wppconnect=http://127.0.0.1:${LOCAL_WPP_PORT:-21465} (localhost only)"
 echo "next=run ./pair.sh for the authorized WhatsApp account"

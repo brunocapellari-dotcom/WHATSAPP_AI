@@ -38,8 +38,8 @@ def test_postgres_is_not_published_and_uses_internal_network() -> None:
 
 def test_only_localhost_operational_ports_are_published() -> None:
     compose = read("deploy/local/docker-compose.yml")
-    assert '"127.0.0.1:8080:8080"' in compose
-    assert '"127.0.0.1:21465:21465"' in compose
+    assert '"127.0.0.1:${LOCAL_INGRESS_PORT:-8080}:8080"' in compose
+    assert '"127.0.0.1:${LOCAL_WPP_PORT:-21465}:21465"' in compose
     assert '"0.0.0.0:' not in compose
 
 
@@ -78,6 +78,10 @@ def test_backup_and_restore_drill_are_present() -> None:
     assert "pg_restore" in restore
     assert "DROP DATABASE IF EXISTS" in restore
     assert "LOCAL_RESTORE_DRILL_PASS" in restore
+    assert "refusing an unverified backup" in restore
+    assert "relforcerowsecurity" in restore
+    assert "whatsapp_schema_migrations" in restore
+    assert "sha256sum" in restore
 
 
 def test_private_http_egress_is_fail_closed() -> None:

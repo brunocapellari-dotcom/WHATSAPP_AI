@@ -23,7 +23,7 @@ trap cleanup EXIT
 cleanup
 
 cd "$ROOT_DIR"
-bash -n scripts/*.sh provider/wppconnect/*.sh deploy/local/*.sh
+for f in scripts/*.sh provider/wppconnect/*.sh deploy/local/*.sh; do bash -n "$f"; done
 node --check provider/wppconnect/wpp-entrypoint.cjs
 docker compose   --env-file deploy/local/.env.example   -f deploy/local/docker-compose.yml   config --quiet
 

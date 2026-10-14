@@ -10,11 +10,11 @@ docker compose --env-file .env ps
 
 echo
 echo "Ingress health:"
-curl --silent --show-error --fail --max-time 3   http://127.0.0.1:8080/healthz || true
+curl --silent --show-error --fail --max-time 3   http://127.0.0.1:${LOCAL_INGRESS_PORT:-8080}/healthz || true
 echo
 
 echo "Ingress readiness:"
-curl --silent --show-error --fail --max-time 3   http://127.0.0.1:8080/readyz || true
+curl --silent --show-error --fail --max-time 3   http://127.0.0.1:${LOCAL_INGRESS_PORT:-8080}/readyz || true
 echo
 
 echo "Outbox status:"

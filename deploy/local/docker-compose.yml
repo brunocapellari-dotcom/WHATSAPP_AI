@@ -69,7 +69,7 @@ services:
       migrate:
         condition: service_completed_successfully
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${LOCAL_INGRESS_PORT:-8080}:8080"
     read_only: true
     tmpfs:
       - /tmp:size=64m,noexec,nosuid,nodev
@@ -207,7 +207,7 @@ services:
       CUSTOM_USER_DATA_DIR: /data/userDataDir/
       WEBHOOK_URL: http://bridge:8081/v1/wppconnect/events
     ports:
-      - "127.0.0.1:21465:21465"
+      - "127.0.0.1:${LOCAL_WPP_PORT:-21465}:21465"
     volumes:
       - ../../provider/wppconnect/wpp-entrypoint.cjs:/opt/whatsapp-ai/wpp-entrypoint.cjs:ro
       - wpp_tokens:/usr/src/wpp-server/tokens
