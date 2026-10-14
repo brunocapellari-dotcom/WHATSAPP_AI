@@ -44,6 +44,7 @@ def database_roles() -> tuple[str, str]:
             "003_upgrade_existing.sql",
             "004_scope_worker_tenant.sql",
             "005_freight_event_history.sql",
+            "006_rate_change_view_json_null.sql",
         }
     )
     assert apply_migrations(ADMIN_URL) == []
@@ -218,9 +219,10 @@ def test_freight_version_history_is_immutable_and_tenant_scoped(
             """
             SELECT version, payload->>'rate'
             FROM whatsapp_freight_event_versions
-            WHERE tenant_id='tenant-history'
+            WHERE tenant_id='tenant-history' AND event_id=%s
             ORDER BY version
-            """
+            """,
+            (event.event_id,),
         )
         assert cur.fetchall() == [(1, "170"), (2, "175")]
 
@@ -228,8 +230,9 @@ def test_freight_version_history_is_immutable_and_tenant_scoped(
             """
             SELECT rate_previous, rate_current, rate_delta, rate_movement
             FROM whatsapp_freight_rate_changes
-            WHERE tenant_id='tenant-history'
-            """
+            WHERE tenant_id='tenant-history' AND event_id=%s
+            """,
+            (event.event_id,),
         )
         assert cur.fetchall() == [(170, 175, 5, "AUMENTO")]
 
