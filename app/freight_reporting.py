@@ -252,8 +252,8 @@ def render_simplified_markdown(report: SimplifiedReport) -> str:
         "|---|---:|",
     ]
     for row in report.rows:
-        left = (f"{row.origin_city}/MT (Faz./Armazém {row.loading_point}) → "
-                f"{row.destination_city}/{row.destination_uf.upper()} — {row.product}")
+        left = (f"{row.origin_city}/MT ({row.loading_point}) → "
+                f"{row.destination_city}/{row.destination_uf.upper()}")
         result.append(f"| {left} | {row.rate_display} |")
     result.extend((
         "",
