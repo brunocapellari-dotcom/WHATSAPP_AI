@@ -6,8 +6,8 @@ proof that only one physical load exists. Every report preserves that distinctio
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, time
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from collections import Counter
 from collections.abc import Iterable
@@ -182,9 +182,12 @@ class SimplifiedRow:
     highest_rate: Decimal
     cargo_confirmed: bool
     commercial_offers: int
+    mixed_units: bool = False
 
     @property
     def rate_display(self) -> str:
+        if self.mixed_units:
+            return "Unidades distintas — consultar relatório completo"
         suffix = "/t" if self.rate_unit == "BRL/t" else "/carga" if self.rate_unit == "BRL/carga" else " (" + self.rate_unit + ")"
         def formatted(value: Decimal) -> str:
             return f"{value:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
@@ -207,23 +210,24 @@ class SimplifiedReport:
 
 def simplify(full: FullReport) -> SimplifiedReport:
     """One inferred/confirmed MT-origin cargo per row, never one per carrier."""
-    grouped: dict[tuple[str, str], list[FreightObservation]] = {}
+    grouped: dict[str, list[FreightObservation]] = {}
     for offer in full.active_offers:
         if _norm(offer.origin_uf) != "MT":
             continue
-        grouped.setdefault((offer.cargo_key, _norm(offer.rate_unit)), []).append(offer)
+        grouped.setdefault(offer.cargo_key, []).append(offer)
 
     rows: list[SimplifiedRow] = []
     for offers in grouped.values():
         first = offers[0]
-        prices = [o.rate for o in offers]
+        units = {_norm(o.rate_unit) for o in offers}
+        prices = [o.rate for o in offers if _norm(o.rate_unit) == _norm(first.rate_unit)]
         rows.append(SimplifiedRow(
             origin_city=first.origin_city, origin_uf=first.origin_uf,
             loading_point=first.loading_point, destination_city=first.destination_city,
             destination_uf=first.destination_uf, product=first.product,
             rate_unit=first.rate_unit, lowest_rate=min(prices),
             highest_rate=max(prices), cargo_confirmed=first.cargo_confirmed,
-            commercial_offers=len(offers),
+            commercial_offers=len(offers), mixed_units=len(units) > 1,
         ))
     rows.sort(key=lambda x: (_norm(x.origin_city), _norm(x.loading_point),
                              _norm(x.destination_city), _norm(x.product), _norm(x.rate_unit)))
