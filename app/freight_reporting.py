@@ -101,7 +101,7 @@ class FreightObservation:
         return _identity(self.carrier, self.origin_city, self.origin_uf,
                          self.destination_city, self.destination_uf, self.loading_point,
                          self.product, self.rate_unit, self.shipment_reference,
-                         self.offer_reference)
+                         self.offer_reference, self.cargo_reference)
 
     @property
     def cargo_key(self) -> str:
