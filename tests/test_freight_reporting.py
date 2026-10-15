@@ -88,8 +88,8 @@ def test_only_mt_origins_and_independent_origin_destination_totals() -> None:
 def test_two_confirmed_cargo_ids_do_not_collapse() -> None:
     engine = FreightReportEngine()
     full = engine.process(dt(15, 8, 30), [
-        offer("a", cargo_ref="LOAD-A", offer_ref="contract-a"),
-        offer("b", cargo_ref="LOAD-B", offer_ref="contract-b"),
+        offer("a", cargo_ref="LOAD-A"),
+        offer("b", cargo_ref="LOAD-B"),
     ])
     simple = simplify(full)
     assert simple.total_open_lots == 2
