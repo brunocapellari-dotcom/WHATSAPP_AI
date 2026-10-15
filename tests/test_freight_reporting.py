@@ -196,6 +196,7 @@ def test_different_units_are_not_compared_as_one_price_band() -> None:
         offer("b", "Fibra Forte", "5500", rate_unit="BRL/carga"),
     ])
     simple = simplify(full)
-    # Until proper unit conversion, these stay as distinct, noncomparable rows.
-    assert simple.total_open_lots == 2
-    assert {r.rate_unit for r in simple.rows} == {"BRL/t", "BRL/carga"}
+    # One physical cargo; never sum prices with incompatible units.
+    assert simple.total_open_lots == 1
+    assert simple.rows[0].mixed_units
+    assert "Unidades distintas" in simple.rows[0].rate_display
