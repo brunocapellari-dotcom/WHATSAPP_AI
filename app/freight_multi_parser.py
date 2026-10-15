@@ -13,7 +13,7 @@ from decimal import Decimal
 from .parser import PRODUCT_ALIASES, parse_freight, normalize_text
 
 PRICE_AFTER_CURRENCY = re.compile(
-    r"R\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)"
+    r"R\$\s*(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)(?![\d.,])"
 )
 DESTINATION = re.compile(r"\bDESTINO\s*:\s*(.+)", re.IGNORECASE)
 ORIGIN_AND_LOADING = re.compile(
