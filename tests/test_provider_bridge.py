@@ -288,3 +288,30 @@ def test_sent_records_can_be_pruned_without_touching_dead(tmp_path: Path, monkey
     monkeypatch.setattr(bridge.time, "time", lambda: real_time() + 700_000)
     assert outbox.prune_sent(604800) == 1
     assert outbox.status_counts()["SENT"] == 0
+
+
+def test_inbound_chat_allowlist_rejects_unapproved_and_private_chats() -> None:
+    payload = wpp_payload(chatId="12345@g.us", isGroupMsg=True)
+    assert normalize_wppconnect_event(
+        payload, allowed_sessions={"freight-prod"}, allowed_chat_ids={"other@g.us"}
+    ) is None
+    assert normalize_wppconnect_event(
+        payload, allowed_sessions={"freight-prod"}, allowed_chat_ids={"12345@g.us"}
+    ) is not None
+    assert normalize_wppconnect_event(
+        wpp_payload(chatId="556599999999@c.us"),
+        allowed_sessions={"freight-prod"}, allowed_chat_ids={"12345@g.us"}
+    ) is None
+
+
+def test_inbound_secret_and_chat_allowlist_fail_closed(monkeypatch) -> None:
+    monkeypatch.delenv("WPP_ALLOWED_CHAT_IDS", raising=False)
+    monkeypatch.delenv("WPP_INBOUND_WEBHOOK_SECRET", raising=False)
+    with pytest.raises(BridgeConfigError):
+        bridge._allowed_chat_ids()
+    with pytest.raises(BridgeConfigError):
+        bridge._incoming_webhook_secret()
+    monkeypatch.setenv("WPP_ALLOWED_CHAT_IDS", "12345@g.us")
+    monkeypatch.setenv("WPP_INBOUND_WEBHOOK_SECRET", "a" * 32)
+    assert bridge._allowed_chat_ids() == {"12345@g.us"}
+    assert bridge._incoming_webhook_secret() == "a" * 32
