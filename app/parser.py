@@ -8,7 +8,7 @@ from decimal import Decimal
 
 from .models import EntityValue, FreightClassification
 
-RATE_RE = re.compile(r"(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)")
+RATE_RE = re.compile(r"R\$\s*(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)(?![\d.,])", re.IGNORECASE)
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?55\s*)?\(?\d{2}\)?\s*9?\d{4}[-\s]?\d{4}(?!\d)")
 DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\b")
 URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
@@ -164,16 +164,20 @@ def parse_freight(text: str) -> ParsedFreight:
 
     rate = None
     for line in lines:
-        if "R$" in line.upper() or "FRETE" in normalize_text(line):
+        if "R$" in line.upper():
             match = RATE_RE.search(line)
             if match:
-                raw = match.group(1).replace(".", "").replace(",", ".")
+                raw = match.group(1)
+                if "," in raw:
+                    raw = raw.replace(".", "").replace(",", ".")
+                elif raw.count(".") == 1 and len(raw.split(".")[-1]) == 3:
+                    raw = raw.replace(".", "")
                 rate = Decimal(raw)
                 break
 
     rate_unit = None
     if rate is not None:
-        if re.search(r"(?:R\$\s*)?/?\s*(?:T|TON|TONELADA)\b", normalized, re.IGNORECASE):
+        if re.search(r"(?:/\s*(?:T|TON|TONELADA)|POR\s+TONELADA)\b", normalized, re.IGNORECASE):
             rate_unit = "BRL/t"
         elif re.search(r"POR\s+(?:VIAGEM|CARGA)\b", normalized):
             rate_unit = "BRL/carga"
