@@ -161,6 +161,8 @@ services:
       BRIDGE_SENT_RETENTION_SECONDS: "604800"
       BRIDGE_MAX_WEBHOOK_BYTES: "5000000"
       WPP_ALLOWED_SESSIONS: ${WPP_SESSION_NAME}
+      WPP_ALLOWED_CHAT_IDS: ${WPP_ALLOWED_CHAT_IDS:?Set explicit authorized WhatsApp chat IDs}
+      WPP_INBOUND_WEBHOOK_SECRET: ${WPP_INBOUND_WEBHOOK_SECRET:?Set strong inbound webhook secret}
     depends_on:
       ingress:
         condition: service_healthy
