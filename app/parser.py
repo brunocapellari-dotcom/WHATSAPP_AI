@@ -163,6 +163,7 @@ def parse_freight(text: str) -> ParsedFreight:
         loading_point = None
 
     rate = None
+    rate_line = None
     for line in lines:
         if "R$" in line.upper():
             match = RATE_RE.search(line)
@@ -173,14 +174,20 @@ def parse_freight(text: str) -> ParsedFreight:
                 elif raw.count(".") == 1 and len(raw.split(".")[-1]) == 3:
                     raw = raw.replace(".", "")
                 rate = Decimal(raw)
+                rate_line = line
                 break
 
     rate_unit = None
-    if rate is not None:
-        if re.search(r"(?:/\s*(?:T|TON|TONELADA)|POR\s+TONELADA)\b", normalized, re.IGNORECASE):
-            rate_unit = "BRL/t"
-        elif re.search(r"POR\s+(?:VIAGEM|CARGA)\b", normalized):
+    if rate_line is not None:
+        # The price line has precedence over unrelated headers and routes.
+        if re.search(r"\bPOR\s+(?:VIAGEM|CARGA)\b", rate_line, re.IGNORECASE):
             rate_unit = "BRL/carga"
+        elif re.search(r"/\s*(?:T|TON|TONELADA)\b|\bPOR\s+TONELADA\b", rate_line, re.IGNORECASE):
+            rate_unit = "BRL/t"
+        elif re.search(r"\bPOR\s+(?:VIAGEM|CARGA)\b", normalized, re.IGNORECASE):
+            rate_unit = "BRL/carga"
+        elif re.search(r"/\s*(?:T|TON|TONELADA)\b|\bPOR\s+TONELADA\b", normalized, re.IGNORECASE):
+            rate_unit = "BRL/t"
 
     phone_m = PHONE_RE.search(text)
     date_m = DATE_RE.search(text)
