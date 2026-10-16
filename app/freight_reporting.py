@@ -235,8 +235,8 @@ def simplify(full: FullReport) -> SimplifiedReport:
     origin: Counter[str] = Counter()
     dest: Counter[str] = Counter()
     for row in rows:
-        origin[row.origin_city] += 1
-        dest[f"{row.destination_city}/{row.destination_uf.upper()}"] += 1
+        origin[_norm(row.origin_city)] += 1
+        dest[f"{_norm(row.destination_city)}/{_norm(row.destination_uf)}"] += 1
     return SimplifiedReport(full.cutoff, tuple(rows), dict(sorted(origin.items())),
                             dict(sorted(dest.items())))
 
@@ -304,7 +304,7 @@ def render_full_markdown(report: FullReport) -> str:
     result.extend(("", "## Ofertas por município de origem e transportadora",
                    "| Município | Transportadora | Ofertas |", "|---|---|---:|"))
     for (city, carrier), total in report.by_city_and_carrier.items():
-        result.append(f"| {city} | {carrier} | {total} |")
+        result.append(f"| {_md(city)} | {_md(carrier)} | {total} |")
     result.append("")
     return "\n".join(result)
 
