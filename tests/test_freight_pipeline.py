@@ -428,3 +428,21 @@ def test_atomic_store_method_is_used_for_new_events() -> None:
     assert store.calls == [("fixture", "atomic-1", True)]
     assert store.has_source_event("tenant-a", "fixture", "atomic-1")
     assert len(store.outbox) == 1
+
+
+def test_concurrent_duplicate_source_events_are_serialized() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    store = InMemoryFreightStore()
+    pipeline = FreightPipeline(store)
+
+    def ingest_duplicate(_):
+        return pipeline.ingest("tenant-a", "fixture", raw("parallel-1", COMPLETE))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(ingest_duplicate, range(8)))
+
+    assert sum(r.status == "PUBLISHED_TO_OUTBOX" for r in results) == 1
+    assert sum(r.status == "DUPLICATE_SOURCE_EVENT" for r in results) == 7
+    assert len(store.outbox) == 1
+    assert len(store.raw) == 1
