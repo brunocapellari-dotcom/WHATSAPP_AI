@@ -216,8 +216,32 @@ def simplify(full: FullReport) -> SimplifiedReport:
             continue
         grouped.setdefault(offer.cargo_key, []).append(offer)
 
-    rows: list[SimplifiedRow] = []
+    # Reconcile an inferred observation with a confirmed cargo only when
+    # the physical route/loader signature identifies exactly one confirmed lot.
+    # Multiple confirmed IDs on the same route must NEVER be merged.
+    confirmed_by_signature: dict[str, set[str]] = {}
     for offers in grouped.values():
+        for item in offers:
+            if item.cargo_confirmed:
+                signature = _identity(item.origin_city, item.origin_uf, item.loading_point,
+                                      item.destination_city, item.destination_uf,
+                                      item.product, item.shipment_reference)
+                confirmed_by_signature.setdefault(signature, set()).add(item.cargo_key)
+    reconciled: dict[str, list[FreightObservation]] = {}
+    for offers in grouped.values():
+        for item in offers:
+            key = item.cargo_key
+            if not item.cargo_confirmed:
+                signature = _identity(item.origin_city, item.origin_uf, item.loading_point,
+                                      item.destination_city, item.destination_uf,
+                                      item.product, item.shipment_reference)
+                matches = confirmed_by_signature.get(signature, set())
+                if len(matches) == 1:
+                    key = next(iter(matches))
+            reconciled.setdefault(key, []).append(item)
+
+    rows: list[SimplifiedRow] = []
+    for offers in reconciled.values():
         first = offers[0]
         units = {_norm(o.rate_unit) for o in offers}
         prices = [o.rate for o in offers if _norm(o.rate_unit) == _norm(first.rate_unit)]
@@ -226,7 +250,7 @@ def simplify(full: FullReport) -> SimplifiedReport:
             loading_point=first.loading_point, destination_city=first.destination_city,
             destination_uf=first.destination_uf, product=first.product,
             rate_unit=first.rate_unit, lowest_rate=min(prices),
-            highest_rate=max(prices), cargo_confirmed=first.cargo_confirmed,
+            highest_rate=max(prices), cargo_confirmed=any(o.cargo_confirmed for o in offers),
             commercial_offers=len(offers), mixed_units=len(units) > 1,
         ))
     rows.sort(key=lambda x: (_norm(x.origin_city), _norm(x.loading_point),
