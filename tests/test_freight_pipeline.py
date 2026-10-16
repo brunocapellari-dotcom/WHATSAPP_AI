@@ -406,3 +406,25 @@ def test_same_carrier_city_destination_but_different_loading_point_never_merges(
     assert first.event.entities["loading_point"][0].normalized_value == "ARMAZEM CARGILL"
     assert second.event.entities["loading_point"][0].normalized_value == "C VALE"
     assert second.event.rate_change is None
+
+
+def test_atomic_store_method_is_used_for_new_events() -> None:
+    class AtomicSpy(InMemoryFreightStore):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def save_and_enqueue(self, event, logical_key, provider, source_event_id, *, publish=True):
+            self.calls.append((provider, source_event_id, publish))
+            return super().save_and_enqueue(event, logical_key, provider, source_event_id, publish=publish)
+
+        def save_event(self, event, logical_key):
+            assert self.calls, "pipeline must use atomic store API"
+            return super().save_event(event, logical_key)
+
+    store = AtomicSpy()
+    result = FreightPipeline(store).ingest("tenant-a", "fixture", raw("atomic-1", COMPLETE))
+    assert result.status == "PUBLISHED_TO_OUTBOX"
+    assert store.calls == [("fixture", "atomic-1", True)]
+    assert store.has_source_event("tenant-a", "fixture", "atomic-1")
+    assert len(store.outbox) == 1
