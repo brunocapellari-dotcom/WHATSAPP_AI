@@ -200,3 +200,17 @@ def test_different_units_are_not_compared_as_one_price_band() -> None:
     assert simple.total_open_lots == 1
     assert simple.rows[0].mixed_units
     assert "Unidades distintas" in simple.rows[0].rate_display
+
+
+def test_late_publication_reconfirms_on_first_eligible_report() -> None:
+    engine = FreightReportEngine()
+    engine.process(dt(15, 8, 30), [offer("a", published=dt(15, 7))])
+    engine.process(dt(15, 14), [])
+    # WhatsApp publication at 13:00 only reaches our collector at 15:00.
+    delayed = replace(offer("b", published=dt(15, 13)), received_at=dt(15, 15))
+    full = engine.process(dt(15, 17), [delayed])
+    assert len(full.active_offers) == 1
+    assert engine._offers[delayed.carrier_key].absences == 0
+    assert len(engine.process(dt(16, 8, 30), []).active_offers) == 1
+    assert len(engine.process(dt(16, 14), []).active_offers) == 1
+    assert engine.process(dt(16, 17), []).expired_offers == 1
