@@ -20,7 +20,9 @@ ORIGIN_AND_LOADING = re.compile(
     r"^\s*(?P<city>[^—–-]+?)\s*[—–-]\s*"
     r"\(?(?P<loading>[^()]+)\)?\s*$"
 )
-PRICE_UNIT = re.compile(r"(?:R\$\s*[\d.,]+\s*)?/\s*(?:T|TON|TONELADA)\b", re.IGNORECASE)
+PRICE_UNIT = re.compile(r"/\s*(?:T|TON|TONELADA)\b|POR\s+TONELADA\b", re.IGNORECASE)
+PER_LOAD = re.compile(r"\bPOR\s+(?:CARGA|VIAGEM)\b", re.IGNORECASE)
+STATE_PREFIX = re.compile(r"^\s*(?:-\s*)?(?:MT|MATO GROSSO)\s*[-–—]\s*", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -72,7 +74,7 @@ def parse_freight_lines(text: str, source_id: str) -> list[ParsedFreightLine]:
     product = base.product
     company = base.company_raw
     destination = base.destination_raw
-    unit = base.rate_unit
+    unit = None
     result: list[ParsedFreightLine] = []
     for line_no, raw_line in enumerate(text.splitlines(), 1):
         line = raw_line.strip()
@@ -84,7 +86,13 @@ def parse_freight_lines(text: str, source_id: str) -> list[ParsedFreightLine]:
         new_product = _detect_product(line)
         if new_product:
             product = new_product
-        if PRICE_UNIT.search(line):
+        if PER_LOAD.search(line):
+            line_unit = "BRL/carga"
+        elif PRICE_UNIT.search(line):
+            line_unit = "BRL/t"
+        else:
+            line_unit = unit
+        if PRICE_UNIT.search(line) and PRICE_AFTER_CURRENCY.search(line) is None:
             unit = "BRL/t"
         match = PRICE_AFTER_CURRENCY.search(line)
         if match is None:
@@ -94,7 +102,7 @@ def parse_freight_lines(text: str, source_id: str) -> list[ParsedFreightLine]:
         if parsed_place is None:
             continue
         city = parsed_place.group("city").strip(" *📍")
-        loading = parsed_place.group("loading").strip(" *")
+        loading = STATE_PREFIX.sub("", parsed_place.group("loading")).strip(" *")
         # Never parse generic freight commentary or a date as a loading point.
         if not city or not loading or normalize_text(city) in {"FRETE", "DESTINO", "ORIGEM"}:
             continue
@@ -103,7 +111,7 @@ def parse_freight_lines(text: str, source_id: str) -> list[ParsedFreightLine]:
             line_number=line_no,
             company=company, product=product, origin_city=city,
             loading_point=loading, destination_city=destination,
-            rate=_rate(match.group(1)), rate_unit=unit,
+            rate=_rate(match.group(1)), rate_unit=line_unit,
             evidence_text=line,
         ))
     if result:
