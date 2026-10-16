@@ -234,11 +234,20 @@ def simplify(full: FullReport) -> SimplifiedReport:
 
     origin: Counter[str] = Counter()
     dest: Counter[str] = Counter()
+    origin_labels: dict[str, str] = {}
+    destination_labels: dict[str, str] = {}
     for row in rows:
-        origin[_norm(row.origin_city)] += 1
-        dest[f"{_norm(row.destination_city)}/{_norm(row.destination_uf)}"] += 1
-    return SimplifiedReport(full.cutoff, tuple(rows), dict(sorted(origin.items())),
-                            dict(sorted(dest.items())))
+        origin_key = _norm(row.origin_city)
+        destination_key = f"{_norm(row.destination_city)}/{_norm(row.destination_uf)}"
+        origin_labels.setdefault(origin_key, row.origin_city)
+        destination_labels.setdefault(destination_key, f"{row.destination_city}/{row.destination_uf.upper()}")
+        origin[origin_key] += 1
+        dest[destination_key] += 1
+    return SimplifiedReport(
+        full.cutoff, tuple(rows),
+        {origin_labels[k]: count for k, count in sorted(origin.items())},
+        {destination_labels[k]: count for k, count in sorted(dest.items())},
+    )
 
 
 def _md(value: object) -> str:
