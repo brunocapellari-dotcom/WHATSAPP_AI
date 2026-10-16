@@ -470,8 +470,7 @@ class FreightPipeline:
 
         if previous and _semantic_signature(previous) == _semantic_signature(event):
             event.version = previous.version
-            self.store.save_event(event, key)
-            self.store.mark_source_event(tenant_id, provider, raw.source_event_id)
+            self.store.save_and_enqueue(event, key, provider, raw.source_event_id, publish=False)
             return IngestionResult(
                 status="LOGICAL_REPOST",
                 classification=event.classification,
@@ -482,7 +481,5 @@ class FreightPipeline:
         if previous:
             event.version = previous.version + 1
 
-        self.store.save_event(event, key)
-        self.store.enqueue_outbox(event)
-        self.store.mark_source_event(tenant_id, provider, raw.source_event_id)
+        self.store.save_and_enqueue(event, key, provider, raw.source_event_id)
         return IngestionResult(status="PUBLISHED_TO_OUTBOX", classification=event.classification, event=event)
