@@ -39,7 +39,7 @@ def test_simplified_export_has_two_main_columns_and_totals() -> None:
     wb = load_workbook(BytesIO(simplified_xlsx(simple)), read_only=True)
     ws = wb.active
     assert [ws["A1"].value, ws["B1"].value] == ["Origem / Destino", "Frete"]
-    assert ws["A2"].value.startswith("'")
+    assert ws["A2"].data_type == "s"
     assert any(row[0] == "Total de lotes abertos" and row[1] == 1
                for row in ws.values)
 
