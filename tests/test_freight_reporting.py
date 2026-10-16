@@ -214,3 +214,26 @@ def test_late_publication_reconfirms_on_first_eligible_report() -> None:
     assert len(engine.process(dt(16, 8, 30), []).active_offers) == 1
     assert len(engine.process(dt(16, 14), []).active_offers) == 1
     assert engine.process(dt(16, 17), []).expired_offers == 1
+
+
+def test_municipality_case_and_accents_share_one_total() -> None:
+    engine = FreightReportEngine()
+    full = engine.process(dt(15, 8, 30), [
+        offer("case-a", carrier="A", city="Sorriso", loading_point="Farm 1"),
+        offer("case-b", carrier="B", city="SORRISO", loading_point="Farm 2"),
+    ])
+    simple = simplify(full)
+    assert simple.total_open_lots == 2
+    assert len(simple.origin_totals) == 1
+    assert sum(simple.origin_totals.values()) == 2
+    assert sum(simple.destination_totals.values()) == 2
+
+
+def test_untrusted_carrier_cannot_inject_markdown_table_row() -> None:
+    engine = FreightReportEngine()
+    full = engine.process(dt(15, 8, 30), [
+        offer("escape-1", carrier="Transportadora | INJETADO\\n| linha falsa"),
+    ])
+    rendered = render_full_markdown(full)
+    assert "Transportadora \\| INJETADO" in rendered
+    assert "\\n| linha falsa" not in rendered
