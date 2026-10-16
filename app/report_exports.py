@@ -72,7 +72,6 @@ def full_xlsx(report: FullReport) -> bytes:
 
 def report_pdf(report: FullReport | SimplifiedReport) -> bytes:
     """Create a PDF from a validated report without executing any embedded markup."""
-    from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
     from xml.sax.saxutils import escape
