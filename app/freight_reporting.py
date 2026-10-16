@@ -356,8 +356,9 @@ class FreightReportEngine:
                 prior.last_seen = _local(o.published_at)
                 prior.absences = 0
                 reconfirmed.add(key)
-            if report_slot(o.published_at) == cutoff:
-                observed_keys.add(key)
+            # A delayed-but-newly-observed message still reconfirms the offer
+            # at this report; it must not immediately count as an absence.
+            observed_keys.add(key)
         expired = 0
         for key, state in list(self._offers.items()):
             if key in observed_keys or key in new:
