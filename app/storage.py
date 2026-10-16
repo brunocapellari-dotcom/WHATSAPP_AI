@@ -18,6 +18,7 @@ class FreightStore(Protocol):
     def find_logical_event(self, tenant_id: str, logical_key: str) -> FreightEvent | None: ...
     def recent_events(self, tenant_id: str, limit: int = 100) -> list[tuple[str, FreightEvent]]: ...
     def save_event(self, event: FreightEvent, logical_key: str) -> None: ...
+    def save_and_enqueue(self, event: FreightEvent, logical_key: str, provider: str, source_event_id: str, *, publish: bool = True) -> None: ...
     def enqueue_outbox(self, event: FreightEvent) -> None: ...
     def pending_outbox(self, tenant_id: str, limit: int = 100) -> list[tuple[int, FreightEvent]]: ...
     def mark_outbox_sent(self, tenant_id: str, outbox_id: int) -> None: ...
@@ -69,6 +70,12 @@ class InMemoryFreightStore:
             event.model_copy(deep=True),
         )
         self.events[(event.tenant_id, logical_key)] = event
+
+    def save_and_enqueue(self, event: FreightEvent, logical_key: str, provider: str, source_event_id: str, *, publish: bool = True) -> None:
+        self.save_event(event, logical_key)
+        if publish:
+            self.enqueue_outbox(event)
+        self.mark_source_event(event.tenant_id, provider, source_event_id)
 
     def enqueue_outbox(self, event: FreightEvent) -> None:
         all_events = [*self.outbox.values(), *self.dead_outbox.values()]
@@ -293,6 +300,43 @@ class PostgresFreightStore:
                     event.version,
                     json.dumps(payload),
                 ),
+            )
+            conn.commit()
+
+    def save_and_enqueue(self, event: FreightEvent, logical_key: str, provider: str, source_event_id: str, *, publish: bool = True) -> None:
+        """Atomically persist event, outbox and source idempotency marker."""
+        payload = json.dumps(event.model_dump(mode="json"))
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, event.tenant_id)
+            cur.execute(
+                """INSERT INTO whatsapp_freight_event_versions
+                (tenant_id, event_id, version, logical_key, payload, observed_at)
+                VALUES (%s,%s,%s,%s,%s::jsonb,%s)
+                ON CONFLICT (tenant_id, event_id, version) DO NOTHING""",
+                (event.tenant_id, event.event_id, event.version, logical_key, payload, event.timestamp),
+            )
+            cur.execute(
+                """INSERT INTO whatsapp_freight_events
+                (tenant_id, logical_key, event_id, version, payload)
+                VALUES (%s,%s,%s,%s,%s::jsonb)
+                ON CONFLICT (tenant_id, logical_key) DO UPDATE
+                SET event_id=EXCLUDED.event_id, version=EXCLUDED.version,
+                    payload=EXCLUDED.payload, updated_at=now()""",
+                (event.tenant_id, logical_key, event.event_id, event.version, payload),
+            )
+            if publish:
+                cur.execute(
+                    """INSERT INTO whatsapp_agrolog_outbox
+                    (tenant_id, event_id, event_version, payload)
+                    VALUES (%s,%s,%s,%s::jsonb)
+                    ON CONFLICT (event_id, event_version) DO NOTHING""",
+                    (event.tenant_id, event.event_id, event.version, payload),
+                )
+            cur.execute(
+                """INSERT INTO whatsapp_processed_source_events
+                (tenant_id, provider, source_event_id)
+                VALUES (%s,%s,%s) ON CONFLICT DO NOTHING""",
+                (event.tenant_id, provider, source_event_id),
             )
             conn.commit()
 
