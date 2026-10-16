@@ -237,3 +237,27 @@ def test_untrusted_carrier_cannot_inject_markdown_table_row() -> None:
     rendered = render_full_markdown(full)
     assert "Transportadora \\| INJETADO" in rendered
     assert "\\n| linha falsa" not in rendered
+
+
+def test_inferred_lot_merges_with_one_confirmed_cargo() -> None:
+    engine = FreightReportEngine()
+    full = engine.process(dt(15, 8, 30), [
+        offer("confirmed-1", "Carrier A", cargo_ref="CARGO-123"),
+        offer("inferred-1", "Carrier B"),
+    ])
+    simple = simplify(full)
+    assert simple.total_open_lots == 1
+    assert simple.rows[0].commercial_offers == 2
+    assert simple.rows[0].cargo_confirmed
+
+
+def test_two_distinct_confirmed_cargos_are_not_merged() -> None:
+    engine = FreightReportEngine()
+    full = engine.process(dt(15, 8, 30), [
+        offer("confirmed-1", "Carrier A", cargo_ref="CARGO-123"),
+        offer("confirmed-2", "Carrier B", cargo_ref="CARGO-456"),
+        offer("inferred-1", "Carrier C"),
+    ])
+    simple = simplify(full)
+    assert simple.total_open_lots == 3
+    assert sum(simple.origin_totals.values()) == 3
