@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+from contextlib import contextmanager
+from threading import RLock
 from typing import Protocol
 
 import psycopg
@@ -12,6 +15,7 @@ from .security import sha256_hex
 
 
 class FreightStore(Protocol):
+    def ingestion_lock(self, tenant_id: str): ...
     def save_raw(self, tenant_id: str, provider: str, event: RawInboundEvent) -> str: ...
     def has_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> bool: ...
     def mark_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> None: ...
@@ -31,6 +35,7 @@ class InMemoryFreightStore:
     """Test-only store. Production must use PostgresFreightStore."""
 
     def __init__(self, max_outbox_attempts: int = 8) -> None:
+        self._ingestion_mutex = RLock()
         self.raw: list[dict] = []
         self.source_ids: set[tuple[str, str, str]] = set()
         self.events: dict[tuple[str, str], FreightEvent] = {}
@@ -40,6 +45,12 @@ class InMemoryFreightStore:
         self.outbox_attempts: dict[int, int] = {}
         self._next_outbox_id = 1
         self.max_outbox_attempts = max_outbox_attempts
+
+    @contextmanager
+    def ingestion_lock(self, tenant_id: str):
+        # Test store serializes ingestion just like the database implementation.
+        with self._ingestion_mutex:
+            yield
 
     def save_raw(self, tenant_id: str, provider: str, event: RawInboundEvent) -> str:
         ref = f"memory://raw/{tenant_id}/{provider}/{event.source_event_id}"
@@ -162,6 +173,23 @@ class PostgresFreightStore:
         self.worker_mode = worker_mode
         self.max_outbox_attempts = max_outbox_attempts
         self.claim_timeout_seconds = claim_timeout_seconds
+
+    @contextmanager
+    def ingestion_lock(self, tenant_id: str):
+        """Serialize read-modify-write for a tenant across workers and processes.
+
+        Advisory lock lives on a dedicated session while individual store methods
+        use their existing connections. This is deliberately coarse but safe.
+        """
+        digest = hashlib.sha256(("whatsapp-ingest:" + tenant_id).encode()).digest()
+        lock_id = int.from_bytes(digest[:8], "big", signed=True)
+        with psycopg.connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_lock(%s)", (lock_id,))
+                try:
+                    yield
+                finally:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (lock_id,))
 
     @classmethod
     def from_env(cls, *, worker: bool = False) -> PostgresFreightStore:
