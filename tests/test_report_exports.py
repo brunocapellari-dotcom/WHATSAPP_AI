@@ -1,16 +1,26 @@
 """Report export regressions: bytes, totals and untrusted spreadsheet input."""
 from io import BytesIO
+from datetime import datetime
+from decimal import Decimal
 
 from openpyxl import load_workbook
 
-from app.freight_reporting import FreightReportEngine, simplify
+from app.freight_reporting import FreightObservation, FreightReportEngine, MT_TIMEZONE, simplify
 from app.report_exports import (
     full_xlsx,
     report_pdf,
     safe_spreadsheet_text,
     simplified_xlsx,
 )
-from tests.test_freight_reporting import dt, offer
+def dt(day: int, hour: int, minute: int = 0) -> datetime:
+    return datetime(2026, 10, day, hour, minute, tzinfo=MT_TIMEZONE)
+
+
+def offer(source: str, carrier: str = "A", loading_point: str = "Fazenda") -> FreightObservation:
+    return FreightObservation(source_observation_id=source, published_at=dt(15, 7),
+        carrier=carrier, origin_city="Sorriso", origin_uf="MT",
+        destination_city="Rondonópolis", destination_uf="MT", product="SOJA",
+        loading_point=loading_point, rate=Decimal("180"), rate_unit="BRL/t")
 
 
 def test_formula_injection_is_neutralized() -> None:
