@@ -1,2 +1,2 @@
 def test_report_schedule_placeholder():
-    assert True
+    assert 1 + 1 == 2
