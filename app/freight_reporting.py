@@ -241,6 +241,11 @@ def simplify(full: FullReport) -> SimplifiedReport:
                             dict(sorted(dest.items())))
 
 
+def _md(value: object) -> str:
+    """Keep untrusted WhatsApp text inside one Markdown table cell."""
+    return str(value).replace("\\", "\\\\").replace("|", "\\|").replace("\r", " ").replace("\n", " ").replace("\x00", "")
+
+
 def render_simplified_markdown(report: SimplifiedReport) -> str:
     """Two main columns; lot totals only at the END of the report."""
     result = [
@@ -254,7 +259,7 @@ def render_simplified_markdown(report: SimplifiedReport) -> str:
     for row in report.rows:
         left = (f"{row.origin_city}/MT ({row.loading_point}) → "
                 f"{row.destination_city}/{row.destination_uf.upper()}")
-        result.append(f"| {left} | {row.rate_display} |")
+        result.append(f"| {_md(left)} | {_md(row.rate_display)} |")
     result.extend((
         "",
         f"**Total de lotes abertos: {report.total_open_lots}**",
@@ -262,11 +267,11 @@ def render_simplified_markdown(report: SimplifiedReport) -> str:
         "## Totalizador por município de origem",
         "| Município (MT) | Lotes |", "|---|---:|",
     ))
-    result.extend(f"| {city} | {total} |" for city, total in report.origin_totals.items())
+    result.extend(f"| {_md(city)} | {total} |" for city, total in report.origin_totals.items())
     result.extend((f"| **Total** | **{sum(report.origin_totals.values())}** |", "",
                    "## Totalizador por município de destino",
                    "| Destino | Lotes |", "|---|---:|"))
-    result.extend(f"| {city} | {total} |" for city, total in report.destination_totals.items())
+    result.extend(f"| {_md(city)} | {total} |" for city, total in report.destination_totals.items())
     result.extend((f"| **Total** | **{sum(report.destination_totals.values())}** |", "",
                    ("_Quando não houver identificador inequívoco, a identidade do lote é "
                     "inferida por local de carregamento, rota, produto e período de embarque._")))
@@ -286,14 +291,14 @@ def render_full_markdown(report: FullReport) -> str:
         "|---|---|---|---|---:|",
     ]
     for o in report.active_offers:
-        result.append(f"| {o.origin_city}/{o.origin_uf} ({o.loading_point}) "
-                      f"| {o.destination_city}/{o.destination_uf} | {o.product} "
-                      f"| {o.carrier} | {o.rate} {o.rate_unit} |")
+        result.append(f"| {_md(o.origin_city)}/{_md(o.origin_uf)} ({_md(o.loading_point)}) "
+                      f"| {_md(o.destination_city)}/{_md(o.destination_uf)} | {_md(o.product)} "
+                      f"| {_md(o.carrier)} | {o.rate} {_md(o.rate_unit)} |")
     result.extend(("", "## Reajustes no intervalo", 
                    "| Transportadora | Origem → Destino | Anterior | Atual | Δ R$ | Δ % |",
                    "|---|---|---:|---:|---:|---:|"))
     for m in report.movements:
-        result.append(f"| {m.carrier} | {m.origin} → {m.destination} | {m.before} "
+        result.append(f"| {_md(m.carrier)} | {_md(m.origin)} → {_md(m.destination)} | {m.before} "
                       f"| {m.after} | {m.delta:+} | "
                       f"{str(m.percent) + '%' if m.percent is not None else 'N/D'} |")
     result.extend(("", "## Ofertas por município de origem e transportadora",
