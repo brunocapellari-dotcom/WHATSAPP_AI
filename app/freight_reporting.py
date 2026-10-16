@@ -6,15 +6,15 @@ proof that only one physical load exists. Every report preserves that distinctio
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
-from collections import Counter
-from collections.abc import Iterable
-from zoneinfo import ZoneInfo
 import hashlib
 import json
 import unicodedata
+from collections import Counter
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
+from zoneinfo import ZoneInfo
 
 MT_TIMEZONE = ZoneInfo("America/Cuiaba")
 REPORT_TIMES = {(8, 30), (14, 0), (17, 0)}
@@ -268,8 +268,8 @@ def render_simplified_markdown(report: SimplifiedReport) -> str:
                    "| Destino | Lotes |", "|---|---:|"))
     result.extend(f"| {city} | {total} |" for city, total in report.destination_totals.items())
     result.extend((f"| **Total** | **{sum(report.destination_totals.values())}** |", "",
-                   "_Quando não houver identificador inequívoco, a identidade do lote é "
-                   "inferida por local de carregamento, rota, produto e período de embarque._"))
+                   ("_Quando não houver identificador inequívoco, a identidade do lote é "
+                    "inferida por local de carregamento, rota, produto e período de embarque._")))
     return "\n".join(result) + "\n"
 
 
@@ -278,9 +278,9 @@ def render_full_markdown(report: FullReport) -> str:
         "# RELATÓRIO COMPLETO DE FRETES",
         f"Horário: {report.cutoff:%d/%m/%Y %H:%M} (MT)",
         f"Ofertas comerciais ativas: {len(report.active_offers)}",
-        f"Novas: {report.new_offers} | Reconfirmadas: {report.reconfirmed_offers} "
-        f"| Aumentos: {report.increases} | Reduções: {report.decreases} "
-        f"| Retiradas após 3 ausências: {report.expired_offers}",
+        (f"Novas: {report.new_offers} | Reconfirmadas: {report.reconfirmed_offers} "
+         f"| Aumentos: {report.increases} | Reduções: {report.decreases} "
+         f"| Retiradas após 3 ausências: {report.expired_offers}"),
         "",
         "| Origem / Carregamento | Destino | Produto | Transportadora | Frete |",
         "|---|---|---|---|---:|",
