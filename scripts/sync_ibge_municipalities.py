@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-import urllib.request
-
+import httpx
 import psycopg
 
 from app.municipalities import UF_CODES
@@ -31,17 +30,23 @@ def _extract_uf(item: dict) -> str | None:
 
 
 def _download() -> list[tuple[int, str, str]]:
-    request = urllib.request.Request(
+    raw = bytearray()
+    with httpx.stream(
+        "GET",
         IBGE_URL,
         headers={"User-Agent": "WHATSAPP_AI/municipality-sync"},
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-        if response.status != 200:
-            raise RuntimeError(f"IBGE municipality download returned HTTP {response.status}")
-        raw = response.read(MAX_RESPONSE_BYTES + 1)
-    if len(raw) > MAX_RESPONSE_BYTES:
-        raise RuntimeError("IBGE municipality response exceeded safety limit")
-    payload = json.loads(raw)
+        timeout=30,
+        follow_redirects=False,
+    ) as response:
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"IBGE municipality download returned HTTP {response.status_code}"
+            )
+        for chunk in response.iter_bytes():
+            raw.extend(chunk)
+            if len(raw) > MAX_RESPONSE_BYTES:
+                raise RuntimeError("IBGE municipality response exceeded safety limit")
+    payload = json.loads(bytes(raw))
     if not isinstance(payload, list) or len(payload) < 5_000:
         raise RuntimeError("IBGE municipality response is incomplete or malformed")
 
