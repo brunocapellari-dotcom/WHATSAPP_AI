@@ -1,5 +1,15 @@
 -- Durable freight-report snapshots. Apply after core tenant tables and RLS.
 -- One immutable logical closure per tenant, scheduled local cutoff and report kind.
+DO $
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'whatsapp_reporter') THEN
+        CREATE ROLE whatsapp_reporter NOLOGIN;
+    END IF;
+END
+$;
+
+GRANT USAGE ON SCHEMA public TO whatsapp_reporter;
+
 CREATE TABLE IF NOT EXISTS whatsapp_freight_report_snapshots (
     tenant_id TEXT NOT NULL,
     cutoff_at TIMESTAMPTZ NOT NULL,
@@ -14,11 +24,14 @@ CREATE TABLE IF NOT EXISTS whatsapp_freight_report_snapshots (
     PRIMARY KEY (tenant_id, cutoff_at, report_kind)
 );
 
+GRANT SELECT, INSERT, UPDATE ON whatsapp_freight_report_snapshots TO whatsapp_reporter;
+
 ALTER TABLE whatsapp_freight_report_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE whatsapp_freight_report_snapshots FORCE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS whatsapp_report_tenant_policy ON whatsapp_freight_report_snapshots;
 CREATE POLICY whatsapp_report_tenant_policy ON whatsapp_freight_report_snapshots
+    TO whatsapp_reporter
     USING (tenant_id = current_setting('app.tenant_id', true))
     WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 
