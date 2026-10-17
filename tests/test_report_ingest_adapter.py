@@ -29,3 +29,30 @@ def test_adapter_does_not_invent_unknown_uf() -> None:
         resolve_municipality=lambda _: None,
     )
     assert observations == []
+
+
+
+def test_adapter_preserves_ibge_codes_and_source_provenance() -> None:
+    known = {
+        "SORRISO": ("Sorriso", "MT", "5107925"),
+        "RONDONÓPOLIS": ("Rondonópolis", "MT", "5107602"),
+    }
+    observations, rejected = observations_from_message(
+        source_id="canonical-1",
+        text=(
+            "RODOVIVA TRANSPORTES\nSOJA R$/T\n"
+            "DESTINO: RONDONÓPOLIS\n"
+            "📍 SORRISO - (Fazenda Boa Vista) R$ 180,00 + PED"
+        ),
+        published_at=datetime(2026, 10, 17, 7, tzinfo=MT_TIMEZONE),
+        resolve_municipality=lambda city: known.get(city.upper()),
+    )
+    assert rejected == []
+    assert len(observations) == 1
+    item = observations[0]
+    assert item.origin_ibge_code == "5107925"
+    assert item.destination_ibge_code == "5107602"
+    assert item.source_event_id == "canonical-1"
+    assert item.source_line_number is not None
+    assert item.source_text_sha256 is not None
+    assert item.toll_status == "ADDITIONAL"
