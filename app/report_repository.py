@@ -75,13 +75,28 @@ class ReportSnapshotRepository:
         with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
             cur.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant_id,))
             cur.execute(
+                """
+                SELECT content_sha256
+                FROM whatsapp_freight_report_snapshots
+                WHERE tenant_id=%s AND cutoff_at=%s AND report_kind=%s
+                FOR UPDATE
+                """,
+                (tenant_id, cutoff, kind),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                if existing[0] != digest:
+                    raise RuntimeError(
+                        f"immutable report conflict for {kind} at {cutoff.isoformat()}"
+                    )
+                return False
+            cur.execute(
                 """INSERT INTO whatsapp_freight_report_snapshots
                 (tenant_id, cutoff_at, report_kind, status, payload, rendered_markdown,
                  content_sha256, pdf_data, pdf_sha256, xlsx_data, xlsx_sha256,
                  collector_healthy)
                 VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (tenant_id, cutoff_at, report_kind) DO NOTHING
-                RETURNING report_kind""",
+                """,
                 (
                     tenant_id,
                     cutoff,
@@ -97,9 +112,8 @@ class ReportSnapshotRepository:
                     collector_healthy,
                 ),
             )
-            inserted = cur.fetchone() is not None
             conn.commit()
-            return inserted
+            return True
 
     def save_pair(
         self,
