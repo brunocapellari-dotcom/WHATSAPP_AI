@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import pytest
+
 from app.freight_multi_parser import parse_freight_lines
 
 
@@ -88,6 +90,5 @@ def test_single_offer_without_multiple_rows_uses_explicit_currency() -> None:
 
 
 def test_rejects_empty_source_id() -> None:
-    from pytest import raises
-    with raises(ValueError):
+    with pytest.raises(ValueError):
         parse_freight_lines(MULTI, " ")
