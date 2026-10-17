@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Iterable
 from contextlib import contextmanager
 from threading import RLock
 from typing import Protocol
@@ -10,7 +11,9 @@ from typing import Protocol
 import psycopg
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from .freight_reporting import FreightObservation
 from .models import FreightEvent, RawInboundEvent
+from .municipalities import municipality_query
 from .security import sha256_hex
 
 
@@ -32,7 +35,23 @@ class FreightStore(Protocol):
         loading_point: str | None = None,
     ) -> list[tuple[str, FreightEvent]]: ...
     def save_event(self, event: FreightEvent, logical_key: str) -> None: ...
-    def save_and_enqueue(self, event: FreightEvent, logical_key: str, provider: str, source_event_id: str, *, publish: bool = True) -> None: ...
+    def save_and_enqueue(
+        self,
+        event: FreightEvent,
+        logical_key: str,
+        provider: str,
+        source_event_id: str,
+        *,
+        publish: bool = True,
+        observations: Iterable[FreightObservation] = (),
+    ) -> None: ...
+    def save_observations_and_mark_source(
+        self,
+        tenant_id: str,
+        provider: str,
+        source_event_id: str,
+        observations: Iterable[FreightObservation],
+    ) -> None: ...
     def enqueue_outbox(self, event: FreightEvent) -> None: ...
     def pending_outbox(self, tenant_id: str, limit: int = 100) -> list[tuple[int, FreightEvent]]: ...
     def mark_outbox_sent(self, tenant_id: str, outbox_id: int) -> None: ...
@@ -50,6 +69,7 @@ class InMemoryFreightStore:
         self.source_ids: set[tuple[str, str, str]] = set()
         self.events: dict[tuple[str, str], FreightEvent] = {}
         self.event_versions: dict[tuple[str, str, int], FreightEvent] = {}
+        self.report_observations: dict[tuple[str, str], FreightObservation] = {}
         self.outbox: dict[int, FreightEvent] = {}
         self.dead_outbox: dict[int, FreightEvent] = {}
         self.outbox_attempts: dict[int, int] = {}
@@ -131,11 +151,39 @@ class InMemoryFreightStore:
         )
         self.events[(event.tenant_id, logical_key)] = event
 
-    def save_and_enqueue(self, event: FreightEvent, logical_key: str, provider: str, source_event_id: str, *, publish: bool = True) -> None:
+    def save_and_enqueue(
+        self,
+        event: FreightEvent,
+        logical_key: str,
+        provider: str,
+        source_event_id: str,
+        *,
+        publish: bool = True,
+        observations: Iterable[FreightObservation] = (),
+    ) -> None:
         self.save_event(event, logical_key)
+        for observation in observations:
+            self.report_observations.setdefault(
+                (event.tenant_id, observation.source_observation_id),
+                observation,
+            )
         if publish:
             self.enqueue_outbox(event)
         self.mark_source_event(event.tenant_id, provider, source_event_id)
+
+    def save_observations_and_mark_source(
+        self,
+        tenant_id: str,
+        provider: str,
+        source_event_id: str,
+        observations: Iterable[FreightObservation],
+    ) -> None:
+        for observation in observations:
+            self.report_observations.setdefault(
+                (tenant_id, observation.source_observation_id),
+                observation,
+            )
+        self.mark_source_event(tenant_id, provider, source_event_id)
 
     def enqueue_outbox(self, event: FreightEvent) -> None:
         all_events = [*self.outbox.values(), *self.dead_outbox.values()]
@@ -437,8 +485,81 @@ class PostgresFreightStore:
             )
             conn.commit()
 
-    def save_and_enqueue(self, event: FreightEvent, logical_key: str, provider: str, source_event_id: str, *, publish: bool = True) -> None:
-        """Atomically persist event, outbox and source idempotency marker."""
+    @staticmethod
+    def _insert_report_observations(
+        cur,
+        tenant_id: str,
+        provider: str,
+        source_event_id: str,
+        observations: Iterable[FreightObservation],
+    ) -> None:
+        for observation in observations:
+            if (
+                observation.origin_ibge_code is None
+                or observation.destination_ibge_code is None
+                or observation.source_text_sha256 is None
+            ):
+                raise ValueError(
+                    "canonical IBGE codes and source hash are required for report observation"
+                )
+            cur.execute(
+                """
+                INSERT INTO whatsapp_freight_observations (
+                    tenant_id, source_observation_id, provider, source_event_id,
+                    source_line_number, published_at, received_at, carrier, product,
+                    origin_ibge_code, origin_city, origin_uf,
+                    destination_ibge_code, destination_city, destination_uf,
+                    loading_point, rate, rate_unit, toll_status, vehicle_type,
+                    vehicle_count, offer_reference, cargo_reference,
+                    shipment_reference, source_text_sha256,
+                    extraction_confidence, validation_status
+                ) VALUES (
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                    %s,%s,%s,%s,%s,%s,%s,%s,'VALIDATED'
+                )
+                ON CONFLICT (tenant_id, source_observation_id) DO NOTHING
+                """,
+                (
+                    tenant_id,
+                    observation.source_observation_id,
+                    provider,
+                    source_event_id,
+                    observation.source_line_number,
+                    observation.published_at,
+                    observation.received_at,
+                    observation.carrier,
+                    observation.product,
+                    int(observation.origin_ibge_code),
+                    observation.origin_city,
+                    observation.origin_uf,
+                    int(observation.destination_ibge_code),
+                    observation.destination_city,
+                    observation.destination_uf,
+                    observation.loading_point,
+                    observation.rate,
+                    observation.rate_unit,
+                    observation.toll_status,
+                    observation.vehicle_type,
+                    observation.vehicle_count,
+                    observation.offer_reference,
+                    observation.cargo_reference,
+                    observation.shipment_reference,
+                    observation.source_text_sha256,
+                    observation.extraction_confidence,
+                ),
+            )
+
+    def save_and_enqueue(
+        self,
+        event: FreightEvent,
+        logical_key: str,
+        provider: str,
+        source_event_id: str,
+        *,
+        publish: bool = True,
+        observations: Iterable[FreightObservation] = (),
+    ) -> None:
+        """Atomically persist event, report observations, outbox and idempotency marker."""
         payload = json.dumps(event.model_dump(mode="json"))
         with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, event.tenant_id)
@@ -458,6 +579,13 @@ class PostgresFreightStore:
                     payload=EXCLUDED.payload, updated_at=now()""",
                 (event.tenant_id, logical_key, event.event_id, event.version, payload),
             )
+            self._insert_report_observations(
+                cur,
+                event.tenant_id,
+                provider,
+                source_event_id,
+                observations,
+            )
             if publish:
                 cur.execute(
                     """INSERT INTO whatsapp_agrolog_outbox
@@ -473,6 +601,58 @@ class PostgresFreightStore:
                 (event.tenant_id, provider, source_event_id),
             )
             conn.commit()
+
+    def save_observations_and_mark_source(
+        self,
+        tenant_id: str,
+        provider: str,
+        source_event_id: str,
+        observations: Iterable[FreightObservation],
+    ) -> None:
+        with self._connection() as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
+            self._insert_report_observations(
+                cur,
+                tenant_id,
+                provider,
+                source_event_id,
+                observations,
+            )
+            cur.execute(
+                """
+                INSERT INTO whatsapp_processed_source_events
+                    (tenant_id, provider, source_event_id)
+                VALUES (%s,%s,%s)
+                ON CONFLICT DO NOTHING
+                """,
+                (tenant_id, provider, source_event_id),
+            )
+            conn.commit()
+
+    def resolve_municipality(
+        self,
+        raw: str,
+    ) -> tuple[str, str, str] | None:
+        query = municipality_query(raw)
+        if query is None:
+            return None
+        sql_query = """
+            SELECT m.official_name, m.uf, m.ibge_code
+            FROM whatsapp_municipality_aliases a
+            JOIN whatsapp_municipalities m ON m.ibge_code = a.ibge_code
+            WHERE a.alias_normalized=%s
+        """
+        params: list[object] = [query.normalized_name]
+        if query.explicit_uf is not None:
+            sql_query += " AND m.uf=%s"
+            params.append(query.explicit_uf)
+        sql_query += " ORDER BY m.ibge_code"
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql_query, params)
+            rows = cur.fetchall()
+        if len(rows) != 1:
+            return None
+        return str(rows[0][0]), str(rows[0][1]), str(rows[0][2])
 
     def enqueue_outbox(self, event: FreightEvent) -> None:
         with self._connection() as conn, conn.cursor() as cur:
