@@ -22,6 +22,16 @@ ORIGIN_AND_LOADING = re.compile(
 )
 PRICE_UNIT = re.compile(r"/\s*(?:T|TON|TONELADA)\b|POR\s+TONELADA\b", re.IGNORECASE)
 PER_LOAD = re.compile(r"\bPOR\s+(?:CARGA|VIAGEM)\b", re.IGNORECASE)
+TOLL_INCLUDED = re.compile(r"\bPED(?:AGIO|ÁGIO)?\s+(?:INCLUSO|INCLUIDO|INCLUÍDO)\b", re.IGNORECASE)
+TOLL_ADDITIONAL = re.compile(r"(?:\+\s*PED\b|\bPED(?:AGIO|ÁGIO)?\s+(?:A\s+PARTE|SEPARADO))", re.IGNORECASE)
+VEHICLE = re.compile(
+    r"\b(?:(\d+)\s+)?(RODOTREM|BITREM|CARRETA|VANDERLEIA|LS|9\s*EIXOS)\b",
+    re.IGNORECASE,
+)
+COMMERCIAL_REF = re.compile(
+    r"\b(?:OFERTA|REF(?:ERENCIA)?|REFERÊNCIA)\s*[:#-]?\s*([A-Z0-9._/-]+)",
+    re.IGNORECASE,
+)
 STATE_PREFIX = re.compile(r"^\s*(?:-\s*)?(?:MT|MATO GROSSO)\s*[-–—]\s*", re.IGNORECASE)
 
 
@@ -36,6 +46,11 @@ class ParsedFreightLine:
     destination_city: str | None
     rate: Decimal
     rate_unit: str | None
+    toll_status: str
+    vehicle_type: str | None
+    vehicle_count: int | None
+    commercial_reference: str | None
+    confidence: float
     evidence_text: str
 
     @property
@@ -106,14 +121,61 @@ def parse_freight_lines(text: str, source_id: str) -> list[ParsedFreightLine]:
         # Never parse generic freight commentary or a date as a loading point.
         if not city or not loading or normalize_text(city) in {"FRETE", "DESTINO", "ORIGEM"}:
             continue
-        result.append(ParsedFreightLine(
-            source_observation_id=f"{source_id}:line:{line_no}",
-            line_number=line_no,
-            company=company, product=product, origin_city=city,
-            loading_point=loading, destination_city=destination,
-            rate=_rate(match.group(1)), rate_unit=line_unit,
-            evidence_text=line,
-        ))
+        context = f"{line} {text}"
+        toll_status = (
+            "INCLUDED"
+            if TOLL_INCLUDED.search(context)
+            else "ADDITIONAL"
+            if TOLL_ADDITIONAL.search(context)
+            else "UNKNOWN"
+        )
+        vehicle_match = VEHICLE.search(line)
+        reference_match = COMMERCIAL_REF.search(line)
+        confidence = min(
+            0.95,
+            0.60
+            + 0.05
+            * sum(
+                value is not None
+                for value in (
+                    company,
+                    product,
+                    city,
+                    loading,
+                    destination,
+                    line_unit,
+                )
+            ),
+        )
+        result.append(
+            ParsedFreightLine(
+                source_observation_id=f"{source_id}:line:{line_no}",
+                line_number=line_no,
+                company=company,
+                product=product,
+                origin_city=city,
+                loading_point=loading,
+                destination_city=destination,
+                rate=_rate(match.group(1)),
+                rate_unit=line_unit,
+                toll_status=toll_status,
+                vehicle_type=(
+                    normalize_text(vehicle_match.group(2))
+                    if vehicle_match
+                    else None
+                ),
+                vehicle_count=(
+                    int(vehicle_match.group(1))
+                    if vehicle_match and vehicle_match.group(1)
+                    else None
+                ),
+                commercial_reference=(
+                    reference_match.group(1) if reference_match else None
+                ),
+                confidence=confidence,
+                evidence_text=line,
+            )
+        )
     if result:
         return result
 
@@ -122,10 +184,57 @@ def parse_freight_lines(text: str, source_id: str) -> list[ParsedFreightLine]:
     amount = PRICE_AFTER_CURRENCY.search(text)
     if amount is None or not base.origin_raw or not base.destination_raw:
         return []
-    return [ParsedFreightLine(
-        source_observation_id=f"{source_id}:line:1", line_number=1,
-        company=base.company_raw, product=base.product,
-        origin_city=base.origin_raw, loading_point=base.loading_point_raw,
-        destination_city=base.destination_raw, rate=_rate(amount.group(1)),
-        rate_unit=base.rate_unit, evidence_text=text,
-    )]
+    toll_status = (
+        "INCLUDED"
+        if TOLL_INCLUDED.search(text)
+        else "ADDITIONAL"
+        if TOLL_ADDITIONAL.search(text)
+        else "UNKNOWN"
+    )
+    vehicle_match = VEHICLE.search(text)
+    reference_match = COMMERCIAL_REF.search(text)
+    confidence = min(
+        0.95,
+        0.60
+        + 0.05
+        * sum(
+            value is not None
+            for value in (
+                base.company_raw,
+                base.product,
+                base.origin_raw,
+                base.loading_point_raw,
+                base.destination_raw,
+                base.rate_unit,
+            )
+        ),
+    )
+    return [
+        ParsedFreightLine(
+            source_observation_id=f"{source_id}:line:1",
+            line_number=1,
+            company=base.company_raw,
+            product=base.product,
+            origin_city=base.origin_raw,
+            loading_point=base.loading_point_raw,
+            destination_city=base.destination_raw,
+            rate=_rate(amount.group(1)),
+            rate_unit=base.rate_unit,
+            toll_status=toll_status,
+            vehicle_type=(
+                normalize_text(vehicle_match.group(2))
+                if vehicle_match
+                else None
+            ),
+            vehicle_count=(
+                int(vehicle_match.group(1))
+                if vehicle_match and vehicle_match.group(1)
+                else None
+            ),
+            commercial_reference=(
+                reference_match.group(1) if reference_match else None
+            ),
+            confidence=confidence,
+            evidence_text=text,
+        )
+    ]
