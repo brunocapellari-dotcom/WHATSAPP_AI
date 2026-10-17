@@ -56,6 +56,29 @@ services:
       - data_net
     restart: "no"
 
+  municipality-sync:
+    profiles: ["bootstrap"]
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["python", "-m", "scripts.sync_ibge_municipalities"]
+    environment:
+      DATABASE_URL_MIGRATOR: postgresql://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/whatsapp_ai
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - data_net
+      - provider_net
+    restart: "no"
+
   ingress:
     build:
       context: ../..
