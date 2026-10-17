@@ -6,7 +6,11 @@ import hmac
 import pytest
 from fastapi import HTTPException
 
-from app.main import MAX_BODY_BYTES, _bounded_request_body, _validate_security_identifier
+from app.main import (
+    MAX_BODY_BYTES,
+    _bounded_request_body,
+    _validate_security_identifier,
+)
 from app.security import SecurityError, validate_egress_url, verify_webhook_signature
 
 
