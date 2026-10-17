@@ -4,7 +4,6 @@ import pytest
 
 from app.freight_multi_parser import parse_freight_lines
 
-
 MULTI = """FIBRA FORTE TRANSPORTES - FILIAL NOBRES
 FRETE DE MILHO — R$/T
 Destino: Rondonópolis
