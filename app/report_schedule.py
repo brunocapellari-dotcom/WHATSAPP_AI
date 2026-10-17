@@ -20,10 +20,14 @@ def due_slots(last_closed: datetime | None, now: datetime, *, limit: int = 90) -
         raise ValueError("limit must be between 1 and 90")
     local_now = now.astimezone(MT_TIMEZONE)
     first_day = ((last_closed.astimezone(MT_TIMEZONE).date()
-                  if last_closed else local_now.date() - timedelta(days=1)))
+                  if last_closed else local_now.date()))
     result: list[datetime] = []
     day = first_day
+    scanned_days = 0
     while day <= local_now.date():
+        scanned_days += 1
+        if scanned_days > 31:
+            raise ValueError("catch-up exceeds 31 days; replay in bounded batches")
         for hour, minute in sorted(REPORT_TIMES):
             cutoff = datetime(day.year, day.month, day.day, hour, minute,
                               tzinfo=MT_TIMEZONE)
