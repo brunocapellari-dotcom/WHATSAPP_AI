@@ -57,6 +57,19 @@ def _validate_security_identifier(value: str, *, kind: str) -> str:
     return value
 
 
+async def _bounded_request_body(request: Request) -> bytes:
+    length = request.headers.get("content-length")
+    if length is not None:
+        if not length.isdecimal() or int(length) > MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="webhook body too large")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="webhook body too large")
+    return bytes(body)
+
+
 def _validate_attachments(event: RawInboundEvent) -> None:
     for attachment in event.attachments:
         if attachment.mime_type and attachment.mime_type.lower() not in ALLOWED_MIME:
@@ -142,9 +155,7 @@ async def provider_event(
 ) -> IngestionResult:
     provider = _validate_security_identifier(provider, kind="provider")
     x_tenant_id = _validate_security_identifier(x_tenant_id, kind="tenant")
-    body = await request.body()
-    if len(body) > MAX_BODY_BYTES:
-        raise HTTPException(status_code=413, detail="webhook body too large")
+    body = await _bounded_request_body(request)
 
     resolver = WebhookSecretResolver.from_env()
     try:
