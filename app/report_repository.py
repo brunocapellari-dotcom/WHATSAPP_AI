@@ -52,16 +52,17 @@ class ReportSnapshotRepository:
         cutoff = validate_slot(report.cutoff)
         kind, payload, markdown = serialize_report(report)
         digest = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+        status = "READY" if collector_healthy else "DRAFT"
         with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
             cur.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant_id,))
             cur.execute(
                 """INSERT INTO whatsapp_freight_report_snapshots
                 (tenant_id, cutoff_at, report_kind, status, payload, rendered_markdown,
                  content_sha256, collector_healthy)
-                VALUES (%s,%s,%s,'READY',%s::jsonb,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
                 ON CONFLICT (tenant_id, cutoff_at, report_kind) DO NOTHING
                 RETURNING report_kind""",
-                (tenant_id, cutoff, kind, payload, markdown, digest, collector_healthy),
+                (tenant_id, cutoff, kind, status, payload, markdown, digest, collector_healthy),
             )
             inserted = cur.fetchone() is not None
             conn.commit()
