@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -155,7 +156,18 @@ async def provider_event(
             secret=secret,
         )
     except SecurityError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        logger.warning(
+            json.dumps(
+                {
+                    "event": "webhook_authentication_failed",
+                    "provider": provider,
+                    "tenant_id_hash": hashlib.sha256(x_tenant_id.encode("utf-8")).hexdigest()[:12],
+                    "error_type": type(exc).__name__,
+                },
+                sort_keys=True,
+            )
+        )
+        raise HTTPException(status_code=401, detail="invalid webhook authentication") from exc
 
     try:
         raw = RawInboundEvent.model_validate_json(body)
