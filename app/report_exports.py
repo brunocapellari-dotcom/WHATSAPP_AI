@@ -72,9 +72,10 @@ def full_xlsx(report: FullReport) -> bytes:
 
 def report_pdf(report: FullReport | SimplifiedReport) -> bytes:
     """Create a PDF from a validated report without executing any embedded markup."""
+    from xml.sax.saxutils import escape
+
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
-    from xml.sax.saxutils import escape
 
     markdown = (render_full_markdown(report) if isinstance(report, FullReport)
                 else render_simplified_markdown(report))
