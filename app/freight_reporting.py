@@ -74,6 +74,15 @@ class FreightObservation:
     loading_point: str
     rate: Decimal
     rate_unit: str = "BRL/t"
+    source_event_id: str | None = None
+    source_line_number: int | None = None
+    origin_ibge_code: str | None = None
+    destination_ibge_code: str | None = None
+    source_text_sha256: str | None = None
+    extraction_confidence: float = 0.0
+    toll_status: str = "UNKNOWN"
+    vehicle_type: str | None = None
+    vehicle_count: int | None = None
     offer_reference: str | None = None
     cargo_reference: str | None = None
     shipment_reference: str | None = None
@@ -94,12 +103,23 @@ class FreightObservation:
         rate = Decimal(str(self.rate))
         if not rate.is_finite() or rate < 0:
             raise ValueError("rate must be a finite, nonnegative value")
+        if not 0 <= self.extraction_confidence <= 1:
+            raise ValueError("extraction_confidence must be between 0 and 1")
+        if self.toll_status not in {"INCLUDED", "ADDITIONAL", "UNKNOWN"}:
+            raise ValueError("invalid toll_status")
+        if self.vehicle_count is not None and self.vehicle_count < 0:
+            raise ValueError("vehicle_count must be nonnegative")
         object.__setattr__(self, "rate", rate)
 
     @property
     def carrier_key(self) -> str:
-        return _identity(self.carrier, self.origin_city, self.origin_uf,
-                         self.destination_city, self.destination_uf, self.loading_point,
+        return _identity(
+                         self.carrier,
+                         self.origin_ibge_code or self.origin_city,
+                         self.origin_uf,
+                         self.destination_ibge_code or self.destination_city,
+                         self.destination_uf,
+                         self.loading_point,
                          self.product, self.rate_unit, self.shipment_reference,
                          self.offer_reference, self.cargo_reference)
 
@@ -107,11 +127,12 @@ class FreightObservation:
     def cargo_key(self) -> str:
         if self.cargo_reference:
             return _identity("CONFIRMED", self.cargo_reference, self.product,
-                             self.origin_city, self.origin_uf,
-                             self.destination_city, self.destination_uf,
+                             self.origin_ibge_code or self.origin_city, self.origin_uf,
+                             self.destination_ibge_code or self.destination_city, self.destination_uf,
                              self.shipment_reference)
-        return _identity("INFERRED", self.origin_city, self.origin_uf,
-                         self.loading_point, self.destination_city,
+        return _identity("INFERRED", self.origin_ibge_code or self.origin_city, self.origin_uf,
+                         self.loading_point,
+                         self.destination_ibge_code or self.destination_city,
                          self.destination_uf, self.product, self.shipment_reference)
 
     @property
