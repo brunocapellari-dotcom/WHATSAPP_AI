@@ -109,7 +109,7 @@ def main() -> int:
                             sort_keys=True,
                         )
                     )
-                except Exception as exc:
+                except (psycopg.Error, OSError, RuntimeError, TypeError, ValueError) as exc:
                     operations.finish_run(
                         tenant_id,
                         run_id,
