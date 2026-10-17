@@ -44,6 +44,8 @@ def database_roles() -> tuple[str, str]:
             "003_upgrade_existing.sql",
             "004_scope_worker_tenant.sql",
             "005_freight_event_history.sql",
+            "006_freight_report_snapshots.sql",
+            "007_report_delivery_outbox.sql",
         }
     )
     assert apply_migrations(ADMIN_URL) == []
@@ -238,3 +240,17 @@ def test_freight_version_history_is_immutable_and_tenant_scoped(
         assert cur.fetchone()[0] == 0
         cur.execute("SELECT count(*) FROM whatsapp_freight_rate_changes")
         assert cur.fetchone()[0] == 0
+
+
+
+def test_ingestion_lock_reuses_one_database_session(
+    database_roles: tuple[str, str],
+) -> None:
+    ingestor_url, _ = database_roles
+    store = PostgresFreightStore(ingestor_url, RawCipher(b"4" * 32))
+    with store.ingestion_lock("tenant-connection-reuse"):
+        with store._connection() as first:
+            first_pid = first.info.backend_pid
+        with store._connection() as second:
+            second_pid = second.info.backend_pid
+        assert first_pid == second_pid
