@@ -446,3 +446,66 @@ def test_concurrent_duplicate_source_events_are_serialized() -> None:
     assert sum(r.status == "DUPLICATE_SOURCE_EVENT" for r in results) == 7
     assert len(store.outbox) == 1
     assert len(store.raw) == 1
+
+
+
+def test_mutation_lookup_is_not_limited_to_100_recent_events() -> None:
+    store = InMemoryFreightStore()
+    pipeline = FreightPipeline(store)
+    target = """RODOVIVA TRANSPORTES
+FRETE SOJA
+ORIGEM: Sorriso - MT
+DESTINO: Rondonópolis - MT
+LOCAL DE EMBARQUE: Fazenda Target
+R$ 170,00 / T
+"""
+    first = pipeline.ingest(
+        "tenant-a",
+        "fixture",
+        raw(
+            "old-target",
+            target,
+            timestamp=datetime(2026, 10, 1, 7, 0, tzinfo=UTC),
+        ),
+    )
+    assert first.event is not None
+
+    for index in range(120):
+        filler = f"""CARRIER {index} TRANSPORTES
+FRETE SOJA
+ORIGEM: Sorriso - MT
+DESTINO: Rondonópolis - MT
+LOCAL DE EMBARQUE: Fazenda {index}
+R$ 160,00 / T
+"""
+        result = pipeline.ingest(
+            "tenant-a",
+            "fixture",
+            raw(
+                f"newer-{index}",
+                filler,
+                timestamp=datetime(2026, 10, 13, 8, 0, tzinfo=UTC),
+            ),
+        )
+        assert result.event is not None
+
+    update = """RODOVIVA TRANSPORTES
+ATUALIZAÇÃO NOVO VALOR R$ 175,00 / T
+SOJA
+ORIGEM: Sorriso - MT
+DESTINO: Rondonópolis - MT
+LOCAL DE EMBARQUE: Fazenda Target
+"""
+    changed = pipeline.ingest(
+        "tenant-a",
+        "fixture",
+        raw(
+            "old-target-update",
+            update,
+            timestamp=datetime(2026, 10, 13, 9, 0, tzinfo=UTC),
+        ),
+    )
+    assert changed.event is not None
+    assert changed.event.event_id == first.event.event_id
+    assert changed.event.version == 2
+    assert changed.event.rate == 175
