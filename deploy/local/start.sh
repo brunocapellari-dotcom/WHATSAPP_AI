@@ -35,7 +35,7 @@ docker compose --env-file .env exec -T postgres   pg_isready -U postgres -d what
 docker compose --env-file .env run --rm migrate
 docker compose --env-file .env --profile bootstrap run --rm municipality-sync
 
-docker compose --env-file .env up -d ingress bridge wppconnect
+docker compose --env-file .env up -d ingress bridge wppconnect report-scheduler
 
 for _ in $(seq 1 30); do
   if curl --silent --show-error --fail --max-time 2     http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
