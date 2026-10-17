@@ -109,8 +109,21 @@ def _find_equivalent_offer_target(
 ) -> MatchContext | None:
     if not product or origin is None or destination is None:
         return None
+    company_filter = (
+        actor_identity.removeprefix("COMPANY:")
+        if actor_identity.startswith("COMPANY:")
+        else None
+    )
+    candidates = store.candidate_events(
+        tenant_id,
+        product=product,
+        origin=origin.normalized_value,
+        destination=destination.normalized_value,
+        company=company_filter,
+        loading_point=loading_point.normalized_value if loading_point else None,
+    )
     matches: list[MatchContext] = []
-    for logical_key, event in store.recent_events(tenant_id, limit=100):
+    for logical_key, event in candidates:
         if event.product != product:
             continue
         if not event.origin or not event.destination:
@@ -207,7 +220,14 @@ def _find_mutation_target(
     loading_point,
     raw: RawInboundEvent,
 ) -> MatchContext | None:
-    candidates = store.recent_events(tenant_id, limit=100)
+    candidates = store.candidate_events(
+        tenant_id,
+        product=parsed.product,
+        origin=origin.normalized_value if origin else None,
+        destination=destination.normalized_value if destination else None,
+        company=company.normalized_value if company else None,
+        loading_point=loading_point.normalized_value if loading_point else None,
+    )
     reply_to = raw.metadata.get("reply_to_source_event_id")
     if isinstance(reply_to, str) and reply_to:
         for logical_key, event in candidates:
