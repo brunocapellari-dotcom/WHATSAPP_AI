@@ -21,6 +21,16 @@ class FreightStore(Protocol):
     def mark_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> None: ...
     def find_logical_event(self, tenant_id: str, logical_key: str) -> FreightEvent | None: ...
     def recent_events(self, tenant_id: str, limit: int = 100) -> list[tuple[str, FreightEvent]]: ...
+    def candidate_events(
+        self,
+        tenant_id: str,
+        *,
+        product: str | None = None,
+        origin: str | None = None,
+        destination: str | None = None,
+        company: str | None = None,
+        loading_point: str | None = None,
+    ) -> list[tuple[str, FreightEvent]]: ...
     def save_event(self, event: FreightEvent, logical_key: str) -> None: ...
     def save_and_enqueue(self, event: FreightEvent, logical_key: str, provider: str, source_event_id: str, *, publish: bool = True) -> None: ...
     def enqueue_outbox(self, event: FreightEvent) -> None: ...
@@ -74,6 +84,45 @@ class InMemoryFreightStore:
         ]
         rows.sort(key=lambda item: item[1].timestamp, reverse=True)
         return rows[:limit]
+
+    def candidate_events(
+        self,
+        tenant_id: str,
+        *,
+        product: str | None = None,
+        origin: str | None = None,
+        destination: str | None = None,
+        company: str | None = None,
+        loading_point: str | None = None,
+    ) -> list[tuple[str, FreightEvent]]:
+        rows = self.recent_events(tenant_id, limit=max(1, len(self.events)))
+        result: list[tuple[str, FreightEvent]] = []
+        for logical_key, event in rows:
+            candidate_company = next(iter(event.entities.get("company", [])), None)
+            candidate_loading = next(iter(event.entities.get("loading_point", [])), None)
+            if product is not None and event.product != product:
+                continue
+            if origin is not None and (
+                event.origin is None or event.origin.normalized_value != origin
+            ):
+                continue
+            if destination is not None and (
+                event.destination is None
+                or event.destination.normalized_value != destination
+            ):
+                continue
+            if company is not None and (
+                candidate_company is None
+                or candidate_company.normalized_value != company
+            ):
+                continue
+            if loading_point is not None and (
+                candidate_loading is None
+                or candidate_loading.normalized_value != loading_point
+            ):
+                continue
+            result.append((logical_key, event))
+        return result
 
     def save_event(self, event: FreightEvent, logical_key: str) -> None:
         self.event_versions.setdefault(
@@ -292,6 +341,46 @@ class PostgresFreightStore:
             )
             rows = cur.fetchall()
         return [(str(row[0]), FreightEvent.model_validate(row[1])) for row in rows]
+
+    def candidate_events(
+        self,
+        tenant_id: str,
+        *,
+        product: str | None = None,
+        origin: str | None = None,
+        destination: str | None = None,
+        company: str | None = None,
+        loading_point: str | None = None,
+    ) -> list[tuple[str, FreightEvent]]:
+        clauses = ["tenant_id=%s"]
+        params: list[object] = [tenant_id]
+        filters = (
+            ("payload->>'product'", product),
+            ("payload #>> '{origin,normalized_value}'", origin),
+            ("payload #>> '{destination,normalized_value}'", destination),
+            ("payload #>> '{entities,company,0,normalized_value}'", company),
+            (
+                "payload #>> '{entities,loading_point,0,normalized_value}'",
+                loading_point,
+            ),
+        )
+        for expression, value in filters:
+            if value is not None:
+                clauses.append(f"{expression}=%s")
+                params.append(value)
+        query = (
+            "SELECT logical_key, payload FROM whatsapp_freight_events WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY updated_at DESC"
+        )
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        return [
+            (str(row[0]), FreightEvent.model_validate(row[1]))
+            for row in rows
+        ]
 
     def save_event(self, event: FreightEvent, logical_key: str) -> None:
         payload = event.model_dump(mode="json")
