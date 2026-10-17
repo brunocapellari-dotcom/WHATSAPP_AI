@@ -30,5 +30,5 @@ def test_dot_decimal_not_truncated():
 
 def test_unknown_unit_is_not_inferred_from_state():
     result = parse_freight("SOJA\nOrigem: Sinop/MT\nDestino: Rondonópolis\nR$ 180")
-    assert result.rate == Decimal("180")
+    assert result.rate == Decimal(180)
     assert result.rate_unit is None
