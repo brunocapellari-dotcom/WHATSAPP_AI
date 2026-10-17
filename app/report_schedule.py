@@ -19,8 +19,11 @@ def due_slots(last_closed: datetime | None, now: datetime, *, limit: int = 90) -
     if limit < 1 or limit > 90:
         raise ValueError("limit must be between 1 and 90")
     local_now = now.astimezone(MT_TIMEZONE)
-    first_day = ((last_closed.astimezone(MT_TIMEZONE).date()
-                  if last_closed else local_now.date()))
+    first_day = (
+        last_closed.astimezone(MT_TIMEZONE).date()
+        if last_closed
+        else local_now.date()
+    )
     result: list[datetime] = []
     day = first_day
     scanned_days = 0
