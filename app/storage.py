@@ -222,22 +222,40 @@ class PostgresFreightStore:
         self.worker_mode = worker_mode
         self.max_outbox_attempts = max_outbox_attempts
         self.claim_timeout_seconds = claim_timeout_seconds
+        self._ingestion_connection = None
 
     @contextmanager
     def ingestion_lock(self, tenant_id: str):
-        """Serialize read-modify-write for a tenant across workers and processes.
-
-        Advisory lock lives on a dedicated session while individual store methods
-        use their existing connections. This is deliberately coarse but safe.
-        """
+        """Serialize one tenant ingestion and reuse its database session."""
+        if self._ingestion_connection is not None:
+            raise RuntimeError("nested ingestion_lock is not supported")
         digest = hashlib.sha256(("whatsapp-ingest:" + tenant_id).encode()).digest()
         lock_id = int.from_bytes(digest[:8], "big", signed=True)
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
+            self._ingestion_connection = conn
             cur.execute("SELECT pg_advisory_lock(%s)", (lock_id,))
             try:
                 yield
             finally:
-                cur.execute("SELECT pg_advisory_unlock(%s)", (lock_id,))
+                try:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (lock_id,))
+                finally:
+                    self._ingestion_connection = None
+
+    @contextmanager
+    def _connection(self, *, connect_timeout: int | None = None):
+        if self._ingestion_connection is not None:
+            yield self._ingestion_connection
+            return
+        if connect_timeout is None:
+            with psycopg.connect(self.database_url) as conn:
+                yield conn
+            return
+        with psycopg.connect(
+            self.database_url,
+            connect_timeout=connect_timeout,
+        ) as conn:
+            yield conn
 
     @classmethod
     def from_env(cls, *, worker: bool = False) -> PostgresFreightStore:
@@ -270,7 +288,7 @@ class PostgresFreightStore:
         digest = sha256_hex(raw)
         aad = f"{tenant_id}:{provider}:{event.source_event_id}".encode()
         nonce, ciphertext = self.cipher.encrypt(raw, aad)
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """
@@ -295,7 +313,7 @@ class PostgresFreightStore:
         return f"postgres://whatsapp_raw_events/{tenant_id}/{provider}/{event.source_event_id}"
 
     def has_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> bool:
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 "SELECT 1 FROM whatsapp_processed_source_events WHERE tenant_id=%s AND provider=%s AND source_event_id=%s",
@@ -304,7 +322,7 @@ class PostgresFreightStore:
             return cur.fetchone() is not None
 
     def mark_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> None:
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """
@@ -316,7 +334,7 @@ class PostgresFreightStore:
             conn.commit()
 
     def find_logical_event(self, tenant_id: str, logical_key: str) -> FreightEvent | None:
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 "SELECT payload FROM whatsapp_freight_events WHERE tenant_id=%s AND logical_key=%s",
@@ -327,7 +345,7 @@ class PostgresFreightStore:
 
     def recent_events(self, tenant_id: str, limit: int = 100) -> list[tuple[str, FreightEvent]]:
         limit = max(1, min(limit, 500))
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """
@@ -373,7 +391,7 @@ class PostgresFreightStore:
             + " AND ".join(clauses)
             + " ORDER BY updated_at DESC"
         )
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(query, params)
             rows = cur.fetchall()
@@ -384,7 +402,7 @@ class PostgresFreightStore:
 
     def save_event(self, event: FreightEvent, logical_key: str) -> None:
         payload = event.model_dump(mode="json")
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, event.tenant_id)
             cur.execute(
                 """
@@ -422,7 +440,7 @@ class PostgresFreightStore:
     def save_and_enqueue(self, event: FreightEvent, logical_key: str, provider: str, source_event_id: str, *, publish: bool = True) -> None:
         """Atomically persist event, outbox and source idempotency marker."""
         payload = json.dumps(event.model_dump(mode="json"))
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, event.tenant_id)
             cur.execute(
                 """INSERT INTO whatsapp_freight_event_versions
@@ -457,7 +475,7 @@ class PostgresFreightStore:
             conn.commit()
 
     def enqueue_outbox(self, event: FreightEvent) -> None:
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, event.tenant_id)
             cur.execute(
                 """
@@ -477,7 +495,7 @@ class PostgresFreightStore:
 
     def pending_outbox(self, tenant_id: str, limit: int = 100) -> list[tuple[int, FreightEvent]]:
         self._require_worker()
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """
@@ -547,7 +565,7 @@ class PostgresFreightStore:
 
     def mark_outbox_sent(self, tenant_id: str, outbox_id: int) -> None:
         self._require_worker()
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """
@@ -561,7 +579,7 @@ class PostgresFreightStore:
 
     def mark_outbox_failed(self, tenant_id: str, outbox_id: int, error: str) -> None:
         self._require_worker()
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """
@@ -599,7 +617,7 @@ class PostgresFreightStore:
     def readiness_check(self) -> None:
         if self.worker_mode:
             raise RuntimeError("ingress readiness cannot use worker credentials")
-        with psycopg.connect(self.database_url, connect_timeout=5) as conn, conn.cursor() as cur:
+        with self._connection(connect_timeout=5) as conn, conn.cursor() as cur:
             self._set_tenant(cur, "__healthcheck__")
             cur.execute(
                 """
@@ -614,7 +632,7 @@ class PostgresFreightStore:
     def outbox_status_counts(self, tenant_id: str) -> dict[str, int]:
         self._require_worker()
         counts = {"PENDING": 0, "PROCESSING": 0, "SENT": 0, "DEAD": 0}
-        with psycopg.connect(self.database_url, connect_timeout=5) as conn, conn.cursor() as cur:
+        with self._connection(connect_timeout=5) as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """
