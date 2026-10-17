@@ -17,6 +17,10 @@ set -a
 source .env
 set +a
 
+[[ -n "${WPP_ALLOWED_CHAT_IDS:-}" ]] || fail "WPP_ALLOWED_CHAT_IDS must list explicitly authorized WhatsApp chats"
+[[ "${WPP_ALLOWED_CHAT_IDS}" != "__UNCONFIGURED__" ]] || fail "configure WPP_ALLOWED_CHAT_IDS with explicitly authorized WhatsApp chat IDs before start"
+[[ ${#WPP_INBOUND_WEBHOOK_SECRET} -ge 32 ]] || fail "WPP_INBOUND_WEBHOOK_SECRET must contain at least 32 characters"
+
 docker compose --env-file .env config --quiet
 
 docker compose --env-file .env up -d postgres
