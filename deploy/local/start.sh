@@ -33,6 +33,7 @@ done
 docker compose --env-file .env exec -T postgres   pg_isready -U postgres -d whatsapp_ai >/dev/null 2>&1   || fail "PostgreSQL did not become ready"
 
 docker compose --env-file .env run --rm migrate
+docker compose --env-file .env --profile bootstrap run --rm municipality-sync
 
 docker compose --env-file .env up -d ingress bridge wppconnect
 
