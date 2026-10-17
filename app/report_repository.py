@@ -20,6 +20,7 @@ from .freight_reporting import (
     render_simplified_markdown,
     validate_slot,
 )
+from .report_exports import full_xlsx, report_pdf, simplified_xlsx
 
 
 def _json_default(value: Any) -> str:
@@ -37,6 +38,23 @@ def serialize_report(report: FullReport | SimplifiedReport) -> tuple[str, str, s
     return kind, payload, markdown
 
 
+def _artifacts(
+    report: FullReport | SimplifiedReport,
+) -> tuple[bytes, str, bytes, str]:
+    pdf = report_pdf(report)
+    xlsx = full_xlsx(report) if isinstance(report, FullReport) else simplified_xlsx(report)
+    if not pdf.startswith(b"%PDF") or len(pdf) < 500:
+        raise RuntimeError("generated PDF failed integrity validation")
+    if not xlsx.startswith(b"PK") or len(xlsx) < 500:
+        raise RuntimeError("generated XLSX failed integrity validation")
+    return (
+        pdf,
+        hashlib.sha256(pdf).hexdigest(),
+        xlsx,
+        hashlib.sha256(xlsx).hexdigest(),
+    )
+
+
 class ReportSnapshotRepository:
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
@@ -52,17 +70,32 @@ class ReportSnapshotRepository:
         cutoff = validate_slot(report.cutoff)
         kind, payload, markdown = serialize_report(report)
         digest = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+        pdf, pdf_digest, xlsx, xlsx_digest = _artifacts(report)
         status = "READY" if collector_healthy else "DRAFT"
         with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
             cur.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant_id,))
             cur.execute(
                 """INSERT INTO whatsapp_freight_report_snapshots
                 (tenant_id, cutoff_at, report_kind, status, payload, rendered_markdown,
-                 content_sha256, collector_healthy)
-                VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
+                 content_sha256, pdf_data, pdf_sha256, xlsx_data, xlsx_sha256,
+                 collector_healthy)
+                VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (tenant_id, cutoff_at, report_kind) DO NOTHING
                 RETURNING report_kind""",
-                (tenant_id, cutoff, kind, status, payload, markdown, digest, collector_healthy),
+                (
+                    tenant_id,
+                    cutoff,
+                    kind,
+                    status,
+                    payload,
+                    markdown,
+                    digest,
+                    pdf,
+                    pdf_digest,
+                    xlsx,
+                    xlsx_digest,
+                    collector_healthy,
+                ),
             )
             inserted = cur.fetchone() is not None
             conn.commit()
@@ -84,12 +117,33 @@ class ReportSnapshotRepository:
         for report in (full, simplified):
             kind, payload, markdown = serialize_report(report)
             digest = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
-            snapshots.append((kind, payload, markdown, digest))
+            pdf, pdf_digest, xlsx, xlsx_digest = _artifacts(report)
+            snapshots.append(
+                (
+                    kind,
+                    payload,
+                    markdown,
+                    digest,
+                    pdf,
+                    pdf_digest,
+                    xlsx,
+                    xlsx_digest,
+                )
+            )
 
         inserted: dict[str, bool] = {}
         with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
             cur.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant_id,))
-            for kind, payload, markdown, digest in snapshots:
+            for (
+                kind,
+                payload,
+                markdown,
+                digest,
+                pdf,
+                pdf_digest,
+                xlsx,
+                xlsx_digest,
+            ) in snapshots:
                 cur.execute(
                     """
                     SELECT content_sha256
@@ -111,8 +165,9 @@ class ReportSnapshotRepository:
                     """
                     INSERT INTO whatsapp_freight_report_snapshots
                         (tenant_id, cutoff_at, report_kind, status, payload,
-                         rendered_markdown, content_sha256, collector_healthy)
-                    VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
+                         rendered_markdown, content_sha256, pdf_data, pdf_sha256,
+                         xlsx_data, xlsx_sha256, collector_healthy)
+                    VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s)
                     """,
                     (
                         tenant_id,
@@ -122,6 +177,10 @@ class ReportSnapshotRepository:
                         payload,
                         markdown,
                         digest,
+                        pdf,
+                        pdf_digest,
+                        xlsx,
+                        xlsx_digest,
                         collector_healthy,
                     ),
                 )
@@ -143,6 +202,30 @@ class ReportSnapshotRepository:
             row = cur.fetchone()
         return None if row is None or row[0] is None else row[0]
 
+    def fetch_artifacts(
+        self,
+        tenant_id: str,
+        cutoff: datetime,
+        kind: str,
+    ) -> tuple[bytes, bytes] | None:
+        validate_slot(cutoff)
+        if kind not in {"FULL", "SIMPLIFIED"}:
+            raise ValueError("invalid report kind")
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant_id,))
+            cur.execute(
+                """
+                SELECT pdf_data, xlsx_data
+                FROM whatsapp_freight_report_snapshots
+                WHERE tenant_id=%s AND cutoff_at=%s AND report_kind=%s
+                """,
+                (tenant_id, cutoff, kind),
+            )
+            row = cur.fetchone()
+        if row is None or row[0] is None or row[1] is None:
+            return None
+        return bytes(row[0]), bytes(row[1])
+
     def fetch(self, tenant_id: str, cutoff: datetime, kind: str) -> dict[str, Any] | None:
         validate_slot(cutoff)
         if kind not in {"FULL", "SIMPLIFIED"}:
@@ -150,13 +233,19 @@ class ReportSnapshotRepository:
         with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
             cur.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant_id,))
             cur.execute(
-                """SELECT status, payload, rendered_markdown, content_sha256, collector_healthy
+                """SELECT status, payload, rendered_markdown, content_sha256,
+                          pdf_sha256, xlsx_sha256, collector_healthy
                    FROM whatsapp_freight_report_snapshots
                    WHERE tenant_id=%s AND cutoff_at=%s AND report_kind=%s""",
                 (tenant_id, cutoff, kind),
             )
             row = cur.fetchone()
             return None if row is None else {
-                "status": row[0], "payload": row[1], "markdown": row[2],
-                "sha256": row[3], "collector_healthy": row[4],
+                "status": row[0],
+                "payload": row[1],
+                "markdown": row[2],
+                "sha256": row[3],
+                "pdf_sha256": row[4],
+                "xlsx_sha256": row[5],
+                "collector_healthy": row[6],
             }
