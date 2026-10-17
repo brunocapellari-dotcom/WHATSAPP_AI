@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import uuid4
@@ -267,9 +268,15 @@ def _find_mutation_target(
 
 
 class FreightPipeline:
-    def __init__(self, store: FreightStore, resolver: EntityResolver | None = None) -> None:
+    def __init__(
+        self,
+        store: FreightStore,
+        resolver: EntityResolver | None = None,
+        report_observation_factory: Callable[[RawInboundEvent], list] | None = None,
+    ) -> None:
         self.store = store
         self.resolver = resolver or EntityResolver()
+        self.report_observation_factory = report_observation_factory
 
     def ingest(self, tenant_id: str, provider: str, raw: RawInboundEvent) -> IngestionResult:
         with self.store.ingestion_lock(tenant_id):
@@ -281,6 +288,11 @@ class FreightPipeline:
                 )
 
             raw_reference = self.store.save_raw(tenant_id, provider, raw)
+            report_observations = (
+                self.report_observation_factory(raw)
+                if self.report_observation_factory is not None
+                else []
+            )
             parsed = parse_freight(raw.raw_text)
 
             if parsed.classification in {
@@ -288,7 +300,12 @@ class FreightPipeline:
                 FreightClassification.UNKNOWN,
                 FreightClassification.INFORMATION,
             }:
-                self.store.mark_source_event(tenant_id, provider, raw.source_event_id)
+                self.store.save_observations_and_mark_source(
+                    tenant_id,
+                    provider,
+                    raw.source_event_id,
+                    report_observations,
+                )
                 return IngestionResult(
                     status="CLASSIFIED_NO_FREIGHT_EVENT",
                     classification=parsed.classification,
@@ -304,7 +321,12 @@ class FreightPipeline:
                 FreightClassification.FREIGHT_OFFER,
                 FreightClassification.FREIGHT_REQUEST,
             } and (parsed.product is None or origin is None or destination is None):
-                self.store.mark_source_event(tenant_id, provider, raw.source_event_id)
+                self.store.save_observations_and_mark_source(
+                    tenant_id,
+                    provider,
+                    raw.source_event_id,
+                    report_observations,
+                )
                 return IngestionResult(
                     status="QUALITY_REJECTED",
                     classification=parsed.classification,
@@ -491,7 +513,14 @@ class FreightPipeline:
 
             if previous and _semantic_signature(previous) == _semantic_signature(event):
                 event.version = previous.version
-                self.store.save_and_enqueue(event, key, provider, raw.source_event_id, publish=False)
+                self.store.save_and_enqueue(
+                    event,
+                    key,
+                    provider,
+                    raw.source_event_id,
+                    publish=False,
+                    observations=report_observations,
+                )
                 return IngestionResult(
                     status="LOGICAL_REPOST",
                     classification=event.classification,
@@ -502,5 +531,11 @@ class FreightPipeline:
             if previous:
                 event.version = previous.version + 1
 
-            self.store.save_and_enqueue(event, key, provider, raw.source_event_id)
+            self.store.save_and_enqueue(
+                event,
+                key,
+                provider,
+                raw.source_event_id,
+                observations=report_observations,
+            )
             return IngestionResult(status="PUBLISHED_TO_OUTBOX", classification=event.classification, event=event)
