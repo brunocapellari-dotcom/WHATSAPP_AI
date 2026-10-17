@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS whatsapp_report_delivery_outbox (
         REFERENCES whatsapp_report_recipients (tenant_id, recipient_id)
 );
 
+GRANT SELECT ON whatsapp_report_recipients TO whatsapp_reporter;
+GRANT SELECT, INSERT, UPDATE ON whatsapp_report_delivery_outbox TO whatsapp_reporter;
+GRANT USAGE, SELECT ON SEQUENCE whatsapp_report_delivery_outbox_delivery_id_seq
+    TO whatsapp_reporter;
+
 ALTER TABLE whatsapp_report_recipients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE whatsapp_report_recipients FORCE ROW LEVEL SECURITY;
 ALTER TABLE whatsapp_report_delivery_outbox ENABLE ROW LEVEL SECURITY;
@@ -40,11 +45,13 @@ ALTER TABLE whatsapp_report_delivery_outbox FORCE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS whatsapp_report_recipients_tenant ON whatsapp_report_recipients;
 CREATE POLICY whatsapp_report_recipients_tenant ON whatsapp_report_recipients
+    TO whatsapp_reporter
     USING (tenant_id = current_setting('app.tenant_id', true))
     WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 
 DROP POLICY IF EXISTS whatsapp_report_delivery_tenant ON whatsapp_report_delivery_outbox;
 CREATE POLICY whatsapp_report_delivery_tenant ON whatsapp_report_delivery_outbox
+    TO whatsapp_reporter
     USING (tenant_id = current_setting('app.tenant_id', true))
     WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 
