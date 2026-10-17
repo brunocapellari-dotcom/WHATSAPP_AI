@@ -68,6 +68,81 @@ class ReportSnapshotRepository:
             conn.commit()
             return inserted
 
+    def save_pair(
+        self,
+        tenant_id: str,
+        full: FullReport,
+        simplified: SimplifiedReport,
+        *,
+        collector_healthy: bool,
+    ) -> dict[str, bool]:
+        if full.cutoff != simplified.cutoff:
+            raise ValueError("full and simplified report cutoffs must match")
+        cutoff = validate_slot(full.cutoff)
+        status = "READY" if collector_healthy else "DRAFT"
+        snapshots = []
+        for report in (full, simplified):
+            kind, payload, markdown = serialize_report(report)
+            digest = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+            snapshots.append((kind, payload, markdown, digest))
+
+        inserted: dict[str, bool] = {}
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant_id,))
+            for kind, payload, markdown, digest in snapshots:
+                cur.execute(
+                    """
+                    SELECT content_sha256
+                    FROM whatsapp_freight_report_snapshots
+                    WHERE tenant_id=%s AND cutoff_at=%s AND report_kind=%s
+                    FOR UPDATE
+                    """,
+                    (tenant_id, cutoff, kind),
+                )
+                existing = cur.fetchone()
+                if existing is not None:
+                    if existing[0] != digest:
+                        raise RuntimeError(
+                            f"immutable report conflict for {kind} at {cutoff.isoformat()}"
+                        )
+                    inserted[kind] = False
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO whatsapp_freight_report_snapshots
+                        (tenant_id, cutoff_at, report_kind, status, payload,
+                         rendered_markdown, content_sha256, collector_healthy)
+                    VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
+                    """,
+                    (
+                        tenant_id,
+                        cutoff,
+                        kind,
+                        status,
+                        payload,
+                        markdown,
+                        digest,
+                        collector_healthy,
+                    ),
+                )
+                inserted[kind] = True
+            conn.commit()
+        return inserted
+
+    def last_cutoff(self, tenant_id: str) -> datetime | None:
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant_id,))
+            cur.execute(
+                """
+                SELECT max(cutoff_at)
+                FROM whatsapp_freight_report_snapshots
+                WHERE tenant_id=%s AND report_kind='FULL'
+                """,
+                (tenant_id,),
+            )
+            row = cur.fetchone()
+        return None if row is None or row[0] is None else row[0]
+
     def fetch(self, tenant_id: str, cutoff: datetime, kind: str) -> dict[str, Any] | None:
         validate_slot(cutoff)
         if kind not in {"FULL", "SIMPLIFIED"}:
