@@ -67,12 +67,10 @@ def persist_closure(
     full, simplified = calculate_closure(
         cutoff, observations, collector_healthy=collector_healthy
     )
-    # Both snapshots must be saved before any downstream delivery queue runs.
-    return {
-        "FULL": repository.save_ready(
-            tenant_id, full, collector_healthy=collector_healthy
-        ),
-        "SIMPLIFIED": repository.save_ready(
-            tenant_id, simplified, collector_healthy=collector_healthy
-        ),
-    }
+    # Persist the pair in one transaction before any delivery is queued.
+    return repository.save_pair(
+        tenant_id,
+        full,
+        simplified,
+        collector_healthy=collector_healthy,
+    )
