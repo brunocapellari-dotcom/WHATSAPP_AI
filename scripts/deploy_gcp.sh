@@ -17,6 +17,7 @@ AGROLOG_SERVICE_NAME="${AGROLOG_SERVICE_NAME:-agrolog-freight-ingest}"
 WHATSAPP_WORKER_TENANT_ID="${WHATSAPP_WORKER_TENANT_ID:-}"
 DB_INGEST_ROLE="${DB_INGEST_ROLE:-whatsapp_ingest_app}"
 DB_WORKER_ROLE="${DB_WORKER_ROLE:-whatsapp_worker_app}"
+DB_REPORT_ROLE="${DB_REPORT_ROLE:-whatsapp_report_app}"
 DB_INGRESS_SECRET="${DB_INGRESS_SECRET:-whatsapp-ai-database-url}"
 DB_WORKER_SECRET="${DB_WORKER_SECRET:-whatsapp-ai-database-url-worker}"
 DB_MIGRATOR_SECRET="${DB_MIGRATOR_SECRET:-whatsapp-ai-database-url-migrator}"
@@ -71,7 +72,7 @@ echo "Building image $image"
 gcloud builds submit .   --project "$PROJECT_ID"   --service-account "$BUILD_SERVICE_ACCOUNT"   --gcs-source-staging-dir "gs://${BUILD_SOURCE_BUCKET}/source"   --tag "$image"
 
 echo "Applying checksum-verified migrations with temporary job"
-gcloud run jobs deploy "$MIGRATION_JOB_NAME"   --image "$image"   --region "$REGION"   --project "$PROJECT_ID"   --service-account "$migrator_sa"   --set-cloudsql-instances "$connection_name"   --update-secrets "DATABASE_URL_MIGRATOR=${DB_MIGRATOR_SECRET}:latest"   --set-env-vars "WHATSAPP_DB_INGEST_ROLE=${DB_INGEST_ROLE},WHATSAPP_DB_WORKER_ROLE=${DB_WORKER_ROLE}"   --command python   --args=-m,scripts.release_migrate   --max-retries 0   --task-timeout 10m   --quiet
+gcloud run jobs deploy "$MIGRATION_JOB_NAME"   --image "$image"   --region "$REGION"   --project "$PROJECT_ID"   --service-account "$migrator_sa"   --set-cloudsql-instances "$connection_name"   --update-secrets "DATABASE_URL_MIGRATOR=${DB_MIGRATOR_SECRET}:latest"   --set-env-vars "WHATSAPP_DB_INGEST_ROLE=${DB_INGEST_ROLE},WHATSAPP_DB_WORKER_ROLE=${DB_WORKER_ROLE},WHATSAPP_DB_REPORT_ROLE=${DB_REPORT_ROLE}"   --command python   --args=-m,scripts.release_migrate   --max-retries 0   --task-timeout 10m   --quiet
 migration_job_created=1
 
 gcloud run jobs execute "$MIGRATION_JOB_NAME"   --region "$REGION" --project "$PROJECT_ID" --wait

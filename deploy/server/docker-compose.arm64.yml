@@ -1,0 +1,7 @@
+# Load together with ../local/docker-compose.yml.
+# The base compose preserves localhost-only ingress, WPPConnect and PostgreSQL.
+# Do not expose the WPPConnect API on the public Internet.
+services:
+  wppconnect:
+    image: whatsapp-ai/wppconnect-arm64:c19251895e03922d302bffada6b5a4f8383fe5ae
+    platform: linux/arm64

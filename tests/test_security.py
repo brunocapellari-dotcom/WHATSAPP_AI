@@ -6,7 +6,11 @@ import hmac
 import pytest
 from fastapi import HTTPException
 
-from app.main import _validate_security_identifier
+from app.main import (
+    MAX_BODY_BYTES,
+    _bounded_request_body,
+    _validate_security_identifier,
+)
 from app.security import SecurityError, validate_egress_url, verify_webhook_signature
 
 
@@ -57,3 +61,38 @@ def test_security_identifiers_reject_ambiguous_or_unsafe_values(value: str, kind
 def test_security_identifiers_accept_canonical_values() -> None:
     assert _validate_security_identifier("tenant-01", kind="tenant") == "tenant-01"
     assert _validate_security_identifier("wppconnect.prod", kind="provider") == "wppconnect.prod"
+
+
+
+class _StreamingRequest:
+    def __init__(self, chunks: list[bytes], content_length: str | None = None) -> None:
+        self._chunks = chunks
+        self.headers = {}
+        if content_length is not None:
+            self.headers["content-length"] = content_length
+
+    async def stream(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+@pytest.mark.asyncio
+async def test_bounded_request_body_accepts_exact_limit() -> None:
+    request = _StreamingRequest([b"a" * MAX_BODY_BYTES], str(MAX_BODY_BYTES))
+    assert len(await _bounded_request_body(request)) == MAX_BODY_BYTES
+
+
+@pytest.mark.asyncio
+async def test_bounded_request_body_rejects_declared_oversize_before_streaming() -> None:
+    request = _StreamingRequest([], str(MAX_BODY_BYTES + 1))
+    with pytest.raises(HTTPException) as exc:
+        await _bounded_request_body(request)
+    assert exc.value.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_bounded_request_body_stops_chunked_oversize() -> None:
+    request = _StreamingRequest([b"a" * MAX_BODY_BYTES, b"x"])
+    with pytest.raises(HTTPException) as exc:
+        await _bounded_request_body(request)
+    assert exc.value.status_code == 413

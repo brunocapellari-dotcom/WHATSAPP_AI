@@ -1,0 +1,436 @@
+"""Deterministic freight-report core. No transport side effects or paid services.
+
+A commercial offer belongs to a carrier; a physical cargo can have many offers.
+In the absence of a confirmed cargo ID the cargo grouping is *inferred*, not
+proof that only one physical load exists. Every report preserves that distinction.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import unicodedata
+from collections import Counter
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
+from zoneinfo import ZoneInfo
+
+MT_TIMEZONE = ZoneInfo("America/Cuiaba")
+REPORT_TIMES = {(8, 30), (14, 0), (17, 0)}
+
+
+def _norm(value: str | None) -> str:
+    plain = unicodedata.normalize("NFKD", value or "")
+    return " ".join("".join(c for c in plain if not unicodedata.combining(c)).upper().split())
+
+
+def _identity(*fields: str | None) -> str:
+    data = json.dumps([_norm(x) for x in fields], ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def _local(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("timestamps must contain timezone information")
+    return value.astimezone(MT_TIMEZONE)
+
+
+def report_slot(published_at: datetime) -> datetime:
+    """First scheduled publication where the WhatsApp timestamp can appear.
+
+    Posts from 16:30 through 23:59 are first eligible the NEXT morning.
+    The next morning's 00:00-07:59 section remains identifiable separately.
+    """
+    local = _local(published_at)
+    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    clock = (local.hour, local.minute, local.second, local.microsecond)
+    if clock < (8, 0, 0, 0):
+        return midnight.replace(hour=8, minute=30)
+    if clock < (13, 30, 0, 0):
+        return midnight.replace(hour=14)
+    if clock < (16, 30, 0, 0):
+        return midnight.replace(hour=17)
+    return (midnight + timedelta(days=1)).replace(hour=8, minute=30)
+
+
+def validate_slot(cutoff: datetime) -> datetime:
+    local = _local(cutoff)
+    if (local.hour, local.minute) not in REPORT_TIMES or local.second or local.microsecond:
+        raise ValueError("report publication must be exactly 08:30, 14:00 or 17:00")
+    return local
+
+
+@dataclass(frozen=True)
+class FreightObservation:
+    source_observation_id: str
+    published_at: datetime
+    carrier: str
+    origin_city: str
+    origin_uf: str
+    destination_city: str
+    destination_uf: str
+    product: str
+    loading_point: str
+    rate: Decimal
+    rate_unit: str = "BRL/t"
+    source_event_id: str | None = None
+    source_line_number: int | None = None
+    origin_ibge_code: str | None = None
+    destination_ibge_code: str | None = None
+    source_text_sha256: str | None = None
+    extraction_confidence: float = 0.0
+    toll_status: str = "UNKNOWN"
+    vehicle_type: str | None = None
+    vehicle_count: int | None = None
+    offer_reference: str | None = None
+    cargo_reference: str | None = None
+    shipment_reference: str | None = None
+    received_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _local(self.published_at)
+        if self.received_at is not None:
+            _local(self.received_at)
+        if not self.source_observation_id.strip():
+            raise ValueError("source_observation_id is required")
+        if not all((self.carrier.strip(), self.origin_city.strip(),
+                    self.destination_city.strip(), self.product.strip(),
+                    self.loading_point.strip())):
+            raise ValueError("carrier, origin, destination, product and loading point are required")
+        if not (self.origin_uf.strip() and self.destination_uf.strip()):
+            raise ValueError("UF fields are required")
+        rate = Decimal(str(self.rate))
+        if not rate.is_finite() or rate < 0:
+            raise ValueError("rate must be a finite, nonnegative value")
+        if not 0 <= self.extraction_confidence <= 1:
+            raise ValueError("extraction_confidence must be between 0 and 1")
+        if self.toll_status not in {"INCLUDED", "ADDITIONAL", "UNKNOWN"}:
+            raise ValueError("invalid toll_status")
+        if self.vehicle_count is not None and self.vehicle_count < 0:
+            raise ValueError("vehicle_count must be nonnegative")
+        object.__setattr__(self, "rate", rate)
+
+    @property
+    def carrier_key(self) -> str:
+        return _identity(
+                         self.carrier,
+                         self.origin_ibge_code or self.origin_city,
+                         self.origin_uf,
+                         self.destination_ibge_code or self.destination_city,
+                         self.destination_uf,
+                         self.loading_point,
+                         self.product, self.rate_unit, self.shipment_reference,
+                         self.offer_reference, self.cargo_reference)
+
+    @property
+    def cargo_key(self) -> str:
+        if self.cargo_reference:
+            return _identity("CONFIRMED", self.cargo_reference, self.product,
+                             self.origin_ibge_code or self.origin_city, self.origin_uf,
+                             self.destination_ibge_code or self.destination_city, self.destination_uf,
+                             self.shipment_reference)
+        return _identity("INFERRED", self.origin_ibge_code or self.origin_city, self.origin_uf,
+                         self.loading_point,
+                         self.destination_ibge_code or self.destination_city,
+                         self.destination_uf, self.product, self.shipment_reference)
+
+    @property
+    def cargo_confirmed(self) -> bool:
+        return bool(self.cargo_reference)
+
+
+@dataclass(frozen=True)
+class PriceMovement:
+    carrier: str
+    origin: str
+    destination: str
+    product: str
+    loading_point: str
+    before: Decimal
+    after: Decimal
+    delta: Decimal
+    percent: Decimal | None
+    changed_at: datetime
+
+
+@dataclass
+class _OfferState:
+    offer: FreightObservation
+    first_seen: datetime
+    last_seen: datetime
+    absences: int = 0
+
+
+@dataclass(frozen=True)
+class FullReport:
+    cutoff: datetime
+    active_offers: tuple[FreightObservation, ...]
+    movements: tuple[PriceMovement, ...]
+    new_offers: int
+    reconfirmed_offers: int
+    expired_offers: int
+    duplicate_source_events: int
+    observed_in_window: int
+    collector_healthy: bool
+
+    @property
+    def by_city_and_carrier(self) -> dict[tuple[str, str], int]:
+        counts: Counter[tuple[str, str]] = Counter()
+        for o in self.active_offers:
+            counts[(o.origin_city, o.carrier)] += 1
+        return dict(sorted(counts.items()))
+
+    @property
+    def increases(self) -> int:
+        return sum(m.delta > 0 for m in self.movements)
+
+    @property
+    def decreases(self) -> int:
+        return sum(m.delta < 0 for m in self.movements)
+
+
+@dataclass(frozen=True)
+class SimplifiedRow:
+    origin_city: str
+    origin_uf: str
+    loading_point: str
+    destination_city: str
+    destination_uf: str
+    product: str
+    rate_unit: str
+    lowest_rate: Decimal
+    highest_rate: Decimal
+    cargo_confirmed: bool
+    commercial_offers: int
+    mixed_units: bool = False
+
+    @property
+    def rate_display(self) -> str:
+        if self.mixed_units:
+            return "Unidades distintas — consultar relatório completo"
+        suffix = "/t" if self.rate_unit == "BRL/t" else "/carga" if self.rate_unit == "BRL/carga" else " (" + self.rate_unit + ")"
+        def formatted(value: Decimal) -> str:
+            return f"{value:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
+        if self.lowest_rate == self.highest_rate:
+            return f"R$ {formatted(self.lowest_rate)}{suffix}"
+        return f"R$ {formatted(self.lowest_rate)}–{formatted(self.highest_rate)}{suffix}"
+
+
+@dataclass(frozen=True)
+class SimplifiedReport:
+    cutoff: datetime
+    rows: tuple[SimplifiedRow, ...]
+    origin_totals: dict[str, int]
+    destination_totals: dict[str, int]
+
+    @property
+    def total_open_lots(self) -> int:
+        return len(self.rows)
+
+
+def simplify(full: FullReport) -> SimplifiedReport:
+    """One inferred/confirmed MT-origin cargo per row, never one per carrier."""
+    grouped: dict[str, list[FreightObservation]] = {}
+    for offer in full.active_offers:
+        if _norm(offer.origin_uf) != "MT":
+            continue
+        grouped.setdefault(offer.cargo_key, []).append(offer)
+
+    # Reconcile an inferred observation with a confirmed cargo only when
+    # the physical route/loader signature identifies exactly one confirmed lot.
+    # Multiple confirmed IDs on the same route must NEVER be merged.
+    confirmed_by_signature: dict[str, set[str]] = {}
+    for offers in grouped.values():
+        for item in offers:
+            if item.cargo_confirmed:
+                signature = _identity(item.origin_city, item.origin_uf, item.loading_point,
+                                      item.destination_city, item.destination_uf,
+                                      item.product, item.shipment_reference)
+                confirmed_by_signature.setdefault(signature, set()).add(item.cargo_key)
+    reconciled: dict[str, list[FreightObservation]] = {}
+    for offers in grouped.values():
+        for item in offers:
+            key = item.cargo_key
+            if not item.cargo_confirmed:
+                signature = _identity(item.origin_city, item.origin_uf, item.loading_point,
+                                      item.destination_city, item.destination_uf,
+                                      item.product, item.shipment_reference)
+                matches = confirmed_by_signature.get(signature, set())
+                if len(matches) == 1:
+                    key = next(iter(matches))
+            reconciled.setdefault(key, []).append(item)
+
+    rows: list[SimplifiedRow] = []
+    for offers in reconciled.values():
+        first = offers[0]
+        units = {_norm(o.rate_unit) for o in offers}
+        prices = [o.rate for o in offers if _norm(o.rate_unit) == _norm(first.rate_unit)]
+        rows.append(SimplifiedRow(
+            origin_city=first.origin_city, origin_uf=first.origin_uf,
+            loading_point=first.loading_point, destination_city=first.destination_city,
+            destination_uf=first.destination_uf, product=first.product,
+            rate_unit=first.rate_unit, lowest_rate=min(prices),
+            highest_rate=max(prices), cargo_confirmed=any(o.cargo_confirmed for o in offers),
+            commercial_offers=len(offers), mixed_units=len(units) > 1,
+        ))
+    rows.sort(key=lambda x: (_norm(x.origin_city), _norm(x.loading_point),
+                             _norm(x.destination_city), _norm(x.product), _norm(x.rate_unit)))
+
+    origin: Counter[str] = Counter()
+    dest: Counter[str] = Counter()
+    origin_labels: dict[str, str] = {}
+    destination_labels: dict[str, str] = {}
+    for row in rows:
+        origin_key = _norm(row.origin_city)
+        destination_key = f"{_norm(row.destination_city)}/{_norm(row.destination_uf)}"
+        origin_labels.setdefault(origin_key, row.origin_city)
+        destination_labels.setdefault(destination_key, f"{row.destination_city}/{row.destination_uf.upper()}")
+        origin[origin_key] += 1
+        dest[destination_key] += 1
+    return SimplifiedReport(
+        full.cutoff, tuple(rows),
+        {origin_labels[k]: count for k, count in sorted(origin.items())},
+        {destination_labels[k]: count for k, count in sorted(dest.items())},
+    )
+
+
+def _md(value: object) -> str:
+    """Keep untrusted WhatsApp text inside one Markdown table cell."""
+    return str(value).replace("\\", "\\\\").replace("|", "\\|").replace("\r", " ").replace("\n", " ").replace("\x00", "")
+
+
+def render_simplified_markdown(report: SimplifiedReport) -> str:
+    """Two main columns; lot totals only at the END of the report."""
+    result = [
+        "# RELATÓRIO SIMPLIFICADO DE FRETES",
+        f"Horário de referência: {report.cutoff:%d/%m/%Y %H:%M} (MT)",
+        "Origens: exclusivamente municípios de Mato Grosso.",
+        "",
+        "| Origem → Destino | Frete |",
+        "|---|---:|",
+    ]
+    for row in report.rows:
+        left = (f"{row.origin_city}/MT ({row.loading_point}) → "
+                f"{row.destination_city}/{row.destination_uf.upper()}")
+        result.append(f"| {_md(left)} | {_md(row.rate_display)} |")
+    result.extend((
+        "",
+        f"**Total de lotes abertos: {report.total_open_lots}**",
+        "",
+        "## Totalizador por município de origem",
+        "| Município (MT) | Lotes |", "|---|---:|",
+    ))
+    result.extend(f"| {_md(city)} | {total} |" for city, total in report.origin_totals.items())
+    result.extend((f"| **Total** | **{sum(report.origin_totals.values())}** |", "",
+                   "## Totalizador por município de destino",
+                   "| Destino | Lotes |", "|---|---:|"))
+    result.extend(f"| {_md(city)} | {total} |" for city, total in report.destination_totals.items())
+    result.extend((f"| **Total** | **{sum(report.destination_totals.values())}** |", "",
+                   ("_Quando não houver identificador inequívoco, a identidade do lote é "
+                    "inferida por local de carregamento, rota, produto e período de embarque._")))
+    return "\n".join(result) + "\n"
+
+
+def render_full_markdown(report: FullReport) -> str:
+    result = [
+        "# RELATÓRIO COMPLETO DE FRETES",
+        f"Horário: {report.cutoff:%d/%m/%Y %H:%M} (MT)",
+        f"Ofertas comerciais ativas: {len(report.active_offers)}",
+        (f"Novas: {report.new_offers} | Reconfirmadas: {report.reconfirmed_offers} "
+         f"| Aumentos: {report.increases} | Reduções: {report.decreases} "
+         f"| Retiradas após 3 ausências: {report.expired_offers}"),
+        "",
+        "| Origem / Carregamento | Destino | Produto | Transportadora | Frete |",
+        "|---|---|---|---|---:|",
+    ]
+    for o in report.active_offers:
+        result.append(f"| {_md(o.origin_city)}/{_md(o.origin_uf)} ({_md(o.loading_point)}) "
+                      f"| {_md(o.destination_city)}/{_md(o.destination_uf)} | {_md(o.product)} "
+                      f"| {_md(o.carrier)} | {o.rate} {_md(o.rate_unit)} |")
+    result.extend(("", "## Reajustes no intervalo", 
+                   "| Transportadora | Origem → Destino | Anterior | Atual | Δ R$ | Δ % |",
+                   "|---|---|---:|---:|---:|---:|"))
+    for m in report.movements:
+        result.append(f"| {_md(m.carrier)} | {_md(m.origin)} → {_md(m.destination)} | {m.before} "
+                      f"| {m.after} | {m.delta:+} | "
+                      f"{str(m.percent) + '%' if m.percent is not None else 'N/D'} |")
+    result.extend(("", "## Ofertas por município de origem e transportadora",
+                   "| Município | Transportadora | Ofertas |", "|---|---|---:|"))
+    for (city, carrier), total in report.by_city_and_carrier.items():
+        result.append(f"| {_md(city)} | {_md(carrier)} | {total} |")
+    result.append("")
+    return "\n".join(result)
+
+
+class FreightReportEngine:
+    """Replayable calculation engine; caller persists snapshots and observations.
+
+    Each call represents ONE scheduled closure. A healthy closure with no
+    reconfirmation increments absence once. An unhealthy one freezes absences.
+    """
+    def __init__(self) -> None:
+        self._offers: dict[str, _OfferState] = {}
+        self._observations: set[str] = set()
+        self._last_cutoff: datetime | None = None
+
+    def process(self, cutoff: datetime, observations: Iterable[FreightObservation],
+                *, collector_healthy: bool = True) -> FullReport:
+        cutoff = validate_slot(cutoff)
+        if self._last_cutoff is not None and cutoff <= self._last_cutoff:
+            raise ValueError("cutoffs must be processed in ascending order")
+
+        movements: list[PriceMovement] = []
+        observed_keys: set[str] = set()
+        new: set[str] = set()
+        reconfirmed: set[str] = set()
+        duplicates = 0
+        observed = 0
+        items = sorted(observations, key=lambda o: (_local(o.published_at), o.source_observation_id))
+        for o in items:
+            if o.source_observation_id in self._observations:
+                duplicates += 1
+                continue
+            # Do not use messages received after the published report, or messages
+            # whose assigned first report has not yet been reached.
+            if report_slot(o.published_at) > cutoff or (o.received_at and _local(o.received_at) > cutoff):
+                continue
+            self._observations.add(o.source_observation_id)
+            if report_slot(o.published_at) == cutoff:
+                observed += 1
+            key = o.carrier_key
+            prior = self._offers.get(key)
+            if prior is None:
+                self._offers[key] = _OfferState(o, _local(o.published_at), _local(o.published_at))
+                new.add(key)
+            elif _local(o.published_at) >= prior.last_seen:
+                if prior.offer.rate != o.rate and prior.offer.rate_unit == o.rate_unit:
+                    delta = o.rate - prior.offer.rate
+                    pct = (delta / prior.offer.rate * 100).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP) if prior.offer.rate else None
+                    movements.append(PriceMovement(o.carrier, o.origin_city, o.destination_city,
+                        o.product, o.loading_point, prior.offer.rate, o.rate, delta, pct,
+                        _local(o.published_at)))
+                prior.offer = o
+                prior.last_seen = _local(o.published_at)
+                prior.absences = 0
+                reconfirmed.add(key)
+            # A delayed-but-newly-observed message still reconfirms the offer
+            # at this report; it must not immediately count as an absence.
+            observed_keys.add(key)
+        expired = 0
+        for key, state in list(self._offers.items()):
+            if key in observed_keys or key in new:
+                state.absences = 0
+            elif collector_healthy:
+                state.absences += 1
+                if state.absences >= 3:
+                    del self._offers[key]
+                    expired += 1
+        self._last_cutoff = cutoff
+        active = tuple(s.offer for _, s in sorted(
+            self._offers.items(), key=lambda x: (_norm(x[1].offer.origin_city),
+                _norm(x[1].offer.carrier), _norm(x[1].offer.destination_city), x[0])))
+        return FullReport(cutoff, active, tuple(movements), len(new),
+                          len(reconfirmed - new), expired, duplicates,
+                          observed, collector_healthy)

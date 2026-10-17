@@ -25,10 +25,12 @@ RESTORE_SA_NAME="${RESTORE_SA_NAME:-whatsapp-ai-restore-drill}"
 
 DB_INGEST_USER="${DB_INGEST_ROLE:-whatsapp_ingest_app}"
 DB_WORKER_USER="${DB_WORKER_ROLE:-whatsapp_worker_app}"
+DB_REPORT_USER="${DB_REPORT_ROLE:-whatsapp_report_app}"
 DB_MIGRATOR_USER="${DB_MIGRATOR_USER:-whatsapp_migrator}"
 
 DB_INGRESS_SECRET="${DB_INGRESS_SECRET:-whatsapp-ai-database-url}"
 DB_WORKER_SECRET="${DB_WORKER_SECRET:-whatsapp-ai-database-url-worker}"
+DB_REPORT_SECRET="${DB_REPORT_SECRET:-whatsapp-ai-database-url-report}"
 DB_MIGRATOR_SECRET="${DB_MIGRATOR_SECRET:-whatsapp-ai-database-url-migrator}"
 RAW_KEY_SECRET="${RAW_KEY_SECRET:-whatsapp-ai-raw-encryption-key}"
 WEBHOOK_SECRETS_SECRET="${WEBHOOK_SECRETS_SECRET:-whatsapp-ai-webhook-secrets}"
@@ -178,6 +180,7 @@ ensure_db_user_and_secret() {
 
 ensure_db_user_and_secret "$DB_INGEST_USER" "$DB_INGRESS_SECRET"
 ensure_db_user_and_secret "$DB_WORKER_USER" "$DB_WORKER_SECRET"
+ensure_db_user_and_secret "$DB_REPORT_USER" "$DB_REPORT_SECRET"
 ensure_db_user_and_secret "$DB_MIGRATOR_USER" "$DB_MIGRATOR_SECRET"
 
 ensure_secret_container "$RAW_KEY_SECRET"
