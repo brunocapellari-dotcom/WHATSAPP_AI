@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+
 import httpx
 import psycopg
 
@@ -54,7 +55,7 @@ def _download() -> list[tuple[int, str, str]]:
     seen: set[int] = set()
     for item in payload:
         if not isinstance(item, dict):
-            raise RuntimeError("IBGE municipality row is malformed")
+            raise TypeError("IBGE municipality row is malformed")
         code = item.get("id")
         name = item.get("nome")
         uf = _extract_uf(item)
