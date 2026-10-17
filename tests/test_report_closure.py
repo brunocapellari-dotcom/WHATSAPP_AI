@@ -50,9 +50,23 @@ def test_persist_closure_writes_both_kinds() -> None:
         def __init__(self):
             self.calls = []
 
-        def save_ready(self, tenant_id, report, *, collector_healthy):
-            self.calls.append((tenant_id, type(report).__name__, collector_healthy))
-            return True
+        def save_pair(
+            self,
+            tenant_id,
+            full,
+            simplified,
+            *,
+            collector_healthy,
+        ):
+            self.calls.append(
+                (
+                    tenant_id,
+                    type(full).__name__,
+                    type(simplified).__name__,
+                    collector_healthy,
+                )
+            )
+            return {"FULL": True, "SIMPLIFIED": True}
 
     repo = Repo()
     assert persist_closure(
@@ -62,4 +76,6 @@ def test_persist_closure_writes_both_kinds() -> None:
         [observation()],
         collector_healthy=True,
     ) == {"FULL": True, "SIMPLIFIED": True}
-    assert [kind for _, kind, _ in repo.calls] == ["FullReport", "SimplifiedReport"]
+    assert repo.calls == [
+        ("tenant-a", "FullReport", "SimplifiedReport", True)
+    ]
