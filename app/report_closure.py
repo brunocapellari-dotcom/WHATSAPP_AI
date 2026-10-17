@@ -33,13 +33,23 @@ def calculate_closure(
     from .freight_reporting import report_slot
 
     history = list(observations)
-    slots = sorted({
-        report_slot(o.published_at)
-        for o in history
-        if report_slot(o.published_at) <= cutoff
-    } | {cutoff})
-    if len(slots) > 10000:
-        raise ValueError("historical replay exceeds safe closure limit")
+    from datetime import timedelta
+    from .freight_reporting import MT_TIMEZONE, REPORT_TIMES
+
+    earliest = min((report_slot(o.published_at) for o in history
+                    if report_slot(o.published_at) <= cutoff), default=cutoff)
+    day = earliest.astimezone(MT_TIMEZONE).date()
+    end_day = cutoff.astimezone(MT_TIMEZONE).date()
+    if (end_day - day).days > 365:
+        raise ValueError("historical replay exceeds one-year safety limit")
+    slots = []
+    while day <= end_day:
+        for hour, minute in sorted(REPORT_TIMES):
+            slot = datetime(day.year, day.month, day.day, hour, minute,
+                            tzinfo=MT_TIMEZONE)
+            if earliest <= slot <= cutoff:
+                slots.append(slot)
+        day += timedelta(days=1)
     full = None
     for slot in slots:
         full = engine.process(slot, history, collector_healthy=collector_healthy)
