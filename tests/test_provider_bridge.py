@@ -315,3 +315,45 @@ def test_inbound_secret_and_chat_allowlist_fail_closed(monkeypatch) -> None:
     monkeypatch.setenv("WPP_INBOUND_WEBHOOK_SECRET", "a" * 32)
     assert bridge._allowed_chat_ids() == {"12345@g.us"}
     assert bridge._incoming_webhook_secret() == "a" * 32
+
+
+
+def test_stale_bridge_claim_counts_attempt_and_eventually_dead_letters(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    event = normalize_wppconnect_event(
+        wpp_payload(),
+        allowed_sessions={"freight-prod"},
+    )
+    assert event is not None
+    outbox = SQLiteBridgeOutbox(
+        str(tmp_path / "stale.sqlite3"),
+        BridgeCipher(b"6" * 32),
+        max_attempts=2,
+        claim_timeout_seconds=30,
+    )
+    outbox.ensure_schema()
+    assert outbox.enqueue(event)
+
+    clock = [time.time()]
+    monkeypatch.setattr(bridge.time, "time", lambda: clock[0])
+    assert len(outbox.claim()) == 1
+
+    clock[0] += 31
+    assert len(outbox.claim()) == 1
+    with outbox._connect() as conn:
+        row = conn.execute(
+            "SELECT attempts, status FROM provider_outbox"
+        ).fetchone()
+        assert row is not None
+        assert (int(row["attempts"]), str(row["status"])) == (1, "PROCESSING")
+
+    clock[0] += 31
+    assert outbox.claim() == []
+    with outbox._connect() as conn:
+        row = conn.execute(
+            "SELECT attempts, status FROM provider_outbox"
+        ).fetchone()
+        assert row is not None
+        assert (int(row["attempts"]), str(row["status"])) == (2, "DEAD")
