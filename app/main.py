@@ -10,7 +10,8 @@ import uuid
 
 from fastapi import FastAPI, Header, HTTPException, Request, status
 
-from .models import IngestionResult, RawInboundEvent
+from .freight_reporting import FreightObservation
+from .models import IngestionResult, RawInboundEvent, utc_now
 from .pipeline import FreightPipeline
 from .report_ingest_adapter import observations_from_message
 from .security import SecurityError, WebhookSecretResolver, verify_webhook_signature
@@ -42,7 +43,7 @@ app = FastAPI(
 def _report_observation_factory(
     store: PostgresFreightStore,
     event: RawInboundEvent,
-):
+) -> list[FreightObservation]:
     observations, rejected = observations_from_message(
         source_id=event.source_event_id,
         text=event.raw_text,
