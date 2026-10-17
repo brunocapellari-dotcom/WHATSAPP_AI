@@ -183,13 +183,12 @@ class PostgresFreightStore:
         """
         digest = hashlib.sha256(("whatsapp-ingest:" + tenant_id).encode()).digest()
         lock_id = int.from_bytes(digest[:8], "big", signed=True)
-        with psycopg.connect(self.database_url) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_lock(%s)", (lock_id,))
-                try:
-                    yield
-                finally:
-                    cur.execute("SELECT pg_advisory_unlock(%s)", (lock_id,))
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(%s)", (lock_id,))
+            try:
+                yield
+            finally:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (lock_id,))
 
     @classmethod
     def from_env(cls, *, worker: bool = False) -> PostgresFreightStore:
