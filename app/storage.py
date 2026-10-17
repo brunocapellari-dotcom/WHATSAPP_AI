@@ -394,7 +394,7 @@ class PostgresFreightStore:
             cur.execute(
                 """
                 WITH claimed AS (
-                    SELECT outbox_id
+                    SELECT outbox_id, status AS prior_status
                     FROM whatsapp_agrolog_outbox
                     WHERE tenant_id=%s
                       AND (
@@ -409,17 +409,53 @@ class PostgresFreightStore:
                     FOR UPDATE SKIP LOCKED
                 )
                 UPDATE whatsapp_agrolog_outbox AS o
-                SET status='PROCESSING', processing_started_at=now()
+                SET attempts=o.attempts + CASE
+                        WHEN claimed.prior_status='PROCESSING' THEN 1 ELSE 0
+                    END,
+                    status=CASE
+                        WHEN claimed.prior_status='PROCESSING'
+                             AND o.attempts + 1 >= %s THEN 'DEAD'
+                        ELSE 'PROCESSING'
+                    END,
+                    dead_at=CASE
+                        WHEN claimed.prior_status='PROCESSING'
+                             AND o.attempts + 1 >= %s THEN now()
+                        ELSE o.dead_at
+                    END,
+                    processing_started_at=CASE
+                        WHEN claimed.prior_status='PROCESSING'
+                             AND o.attempts + 1 >= %s THEN NULL
+                        ELSE now()
+                    END,
+                    last_error=CASE
+                        WHEN claimed.prior_status='PROCESSING'
+                             AND o.attempts + 1 >= %s
+                        THEN 'stale processing claim exceeded retry limit'
+                        ELSE o.last_error
+                    END
                 FROM claimed
                 WHERE o.outbox_id = claimed.outbox_id
                   AND o.tenant_id=%s
-                RETURNING o.outbox_id, o.payload
+                RETURNING o.outbox_id, o.payload, o.status
                 """,
-                (tenant_id, self.claim_timeout_seconds, limit, tenant_id),
+                (
+                    tenant_id,
+                    self.claim_timeout_seconds,
+                    limit,
+                    self.max_outbox_attempts,
+                    self.max_outbox_attempts,
+                    self.max_outbox_attempts,
+                    self.max_outbox_attempts,
+                    tenant_id,
+                ),
             )
             rows = cur.fetchall()
             conn.commit()
-        return [(int(row[0]), FreightEvent.model_validate(row[1])) for row in rows]
+        return [
+            (int(row[0]), FreightEvent.model_validate(row[1]))
+            for row in rows
+            if row[2] == "PROCESSING"
+        ]
 
     def mark_outbox_sent(self, tenant_id: str, outbox_id: int) -> None:
         self._require_worker()
