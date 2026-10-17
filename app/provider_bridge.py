@@ -140,7 +140,7 @@ class SQLiteBridgeOutbox:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
                 """
-                SELECT outbox_id, source_event_id, nonce, ciphertext
+                SELECT outbox_id, source_event_id, nonce, ciphertext, status, attempts
                 FROM provider_outbox
                 WHERE
                     (status='PENDING' AND next_attempt_at <= ?)
@@ -153,20 +153,37 @@ class SQLiteBridgeOutbox:
                 """,
                 (now, stale_before, max(1, min(limit, 100))),
             ).fetchall()
-            ids = [int(row["outbox_id"]) for row in rows]
-            for outbox_id in ids:
+            claimed_rows = []
+            for row in rows:
+                outbox_id = int(row["outbox_id"])
+                attempts = int(row["attempts"])
+                if str(row["status"]) == "PROCESSING":
+                    attempts += 1
+                if attempts >= self.max_attempts:
+                    conn.execute(
+                        """
+                        UPDATE provider_outbox
+                        SET attempts=?, status='DEAD', dead_at=?,
+                            processing_started_at=NULL,
+                            last_error='stale processing claim exceeded retry limit'
+                        WHERE outbox_id=?
+                        """,
+                        (attempts, now, outbox_id),
+                    )
+                    continue
                 conn.execute(
                     """
                     UPDATE provider_outbox
-                    SET status='PROCESSING', processing_started_at=?
+                    SET attempts=?, status='PROCESSING', processing_started_at=?
                     WHERE outbox_id=?
                     """,
-                    (now, outbox_id),
+                    (attempts, now, outbox_id),
                 )
+                claimed_rows.append(row)
             conn.execute("COMMIT")
 
         result: list[tuple[int, RawInboundEvent]] = []
-        for row in rows:
+        for row in claimed_rows:
             outbox_id = int(row["outbox_id"])
             source_id = str(row["source_event_id"])
             try:
