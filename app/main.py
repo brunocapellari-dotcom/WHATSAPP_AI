@@ -88,9 +88,10 @@ def _validate_security_identifier(value: str, *, kind: str) -> str:
 
 async def _bounded_request_body(request: Request) -> bytes:
     length = request.headers.get("content-length")
-    if length is not None:
-        if not length.isdecimal() or int(length) > MAX_BODY_BYTES:
-            raise HTTPException(status_code=413, detail="webhook body too large")
+    if length is not None and (
+        not length.isdecimal() or int(length) > MAX_BODY_BYTES
+    ):
+        raise HTTPException(status_code=413, detail="webhook body too large")
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
