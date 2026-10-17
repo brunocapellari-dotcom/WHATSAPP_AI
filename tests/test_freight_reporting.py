@@ -103,7 +103,7 @@ def test_changed_carrier_does_not_change_competitor_price() -> None:
     assert len(full.active_offers) == 2
     assert full.new_offers == 0
     assert full.increases == 1 and full.decreases == 0
-    assert full.movements[0].delta == Decimal("7")
+    assert full.movements[0].delta == Decimal(7)
     assert full.movements[0].percent == Decimal("4.05")
     prices = {o.carrier: o.rate for o in full.active_offers}
     assert prices == {"Rodoviva": 180, "Fibra Forte": 178}
