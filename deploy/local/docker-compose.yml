@@ -12,6 +12,8 @@ services:
       DB_INGEST_PASSWORD: ${DB_INGEST_PASSWORD}
       DB_WORKER_USER: whatsapp_worker_app
       DB_WORKER_PASSWORD: ${DB_WORKER_PASSWORD}
+      DB_REPORT_USER: whatsapp_report_app
+      DB_REPORT_PASSWORD: ${DB_REPORT_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres-init.sh:/docker-entrypoint-initdb.d/00-runtime-users.sh:ro
@@ -39,6 +41,7 @@ services:
       DATABASE_URL_MIGRATOR: postgresql://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/whatsapp_ai
       WHATSAPP_DB_INGEST_ROLE: whatsapp_ingest_app
       WHATSAPP_DB_WORKER_ROLE: whatsapp_worker_app
+      WHATSAPP_DB_REPORT_ROLE: whatsapp_report_app
     depends_on:
       postgres:
         condition: service_healthy
