@@ -7,13 +7,16 @@ closure, preventing in-memory state from being mistaken for persisted history.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .freight_reporting import (
+    MT_TIMEZONE,
+    REPORT_TIMES,
     FreightObservation,
     FreightReportEngine,
     FullReport,
     SimplifiedReport,
+    report_slot,
     simplify,
     validate_slot,
 )
@@ -30,11 +33,7 @@ def calculate_closure(
     engine = FreightReportEngine()
     # Replay all historical publication slots in order; processing only the
     # target slot would discard prior open offers and expiry state.
-    from .freight_reporting import report_slot
-
     history = list(observations)
-    from datetime import timedelta
-    from .freight_reporting import MT_TIMEZONE, REPORT_TIMES
 
     earliest = min((report_slot(o.published_at) for o in history
                     if report_slot(o.published_at) <= cutoff), default=cutoff)
