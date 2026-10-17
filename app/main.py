@@ -12,6 +12,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, status
 
 from .models import IngestionResult, RawInboundEvent
 from .pipeline import FreightPipeline
+from .report_ingest_adapter import observations_from_message
 from .security import SecurityError, WebhookSecretResolver, verify_webhook_signature
 from .storage import PostgresFreightStore
 
@@ -36,6 +37,33 @@ app = FastAPI(
     docs_url=None if os.environ.get("ENABLE_DOCS", "0") != "1" else "/docs",
     redoc_url=None,
 )
+
+
+def _report_observation_factory(
+    store: PostgresFreightStore,
+    event: RawInboundEvent,
+):
+    observations, rejected = observations_from_message(
+        source_id=event.source_event_id,
+        text=event.raw_text,
+        published_at=event.message_timestamp,
+        received_at=utc_now(),
+        resolve_municipality=store.resolve_municipality,
+    )
+    if rejected:
+        logger.warning(
+            json.dumps(
+                {
+                    "event": "report_observations_rejected",
+                    "source_event_id_hash": hashlib.sha256(
+                        event.source_event_id.encode("utf-8")
+                    ).hexdigest()[:12],
+                    "rejected_count": len(rejected),
+                },
+                sort_keys=True,
+            )
+        )
+    return observations
 
 
 def _store() -> PostgresFreightStore:
