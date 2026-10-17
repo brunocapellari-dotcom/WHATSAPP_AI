@@ -3,16 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import uuid4
 
 from .models import (
     FreightClassification,
     FreightEvent,
     IngestionResult,
-    RawInboundEvent,
     RateChange,
     RateMovement,
+    RawInboundEvent,
     TruthClassification,
 )
 from .parser import EntityResolver, ParsedFreight, normalize_text, parse_freight
@@ -83,7 +83,7 @@ def _build_rate_change(
     delta_percent = None
     if previous.rate != 0:
         delta_percent = (
-            (delta / previous.rate) * Decimal("100")
+            (delta / previous.rate) * Decimal(100)
         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return RateChange(
         previous_rate=previous.rate,
