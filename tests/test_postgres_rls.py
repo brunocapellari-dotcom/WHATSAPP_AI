@@ -7,6 +7,7 @@ import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
+from app.freight_reporting import FreightObservation
 from app.models import (
     FreightClassification,
     FreightEvent,
@@ -46,6 +47,7 @@ def database_roles() -> tuple[str, str]:
             "005_freight_event_history.sql",
             "006_freight_report_snapshots.sql",
             "007_report_delivery_outbox.sql",
+            "008_municipalities_and_report_observations.sql",
         }
     )
     assert apply_migrations(ADMIN_URL) == []
@@ -65,10 +67,16 @@ def database_roles() -> tuple[str, str]:
                 ) THEN
                     CREATE ROLE wa_test_worker LOGIN PASSWORD 'worker-test-password';
                 END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_roles WHERE rolname='wa_test_reporter'
+                ) THEN
+                    CREATE ROLE wa_test_reporter LOGIN PASSWORD 'reporter-test-password';
+                END IF;
             END
             $$;
             GRANT whatsapp_ingestor TO wa_test_ingestor;
             GRANT whatsapp_worker TO wa_test_worker;
+            GRANT whatsapp_reporter TO wa_test_reporter;
             """
         )
         conn.commit()
@@ -254,3 +262,96 @@ def test_ingestion_lock_reuses_one_database_session(
         with store._connection() as second:
             second_pid = second.info.backend_pid
         assert first_pid == second_pid
+
+
+
+def test_canonical_municipality_resolution_and_reporter_rls(
+    database_roles: tuple[str, str],
+) -> None:
+    assert ADMIN_URL is not None
+    ingestor_url, _ = database_roles
+    reporter_url = _role_dsn("wa_test_reporter", "reporter-test-password")
+
+    with psycopg.connect(ADMIN_URL) as conn, conn.cursor() as cur:
+        for code, name, uf in (
+            (5107925, "Sorriso", "MT"),
+            (5107602, "Rondonópolis", "MT"),
+        ):
+            normalized = (
+                name.upper()
+                .replace("Ó", "O")
+                .replace("Ô", "O")
+                .replace("Í", "I")
+            )
+            cur.execute(
+                """
+                INSERT INTO whatsapp_municipalities
+                    (ibge_code, official_name, normalized_name, uf, source_url)
+                VALUES (%s,%s,%s,%s,'fixture://ibge')
+                ON CONFLICT (ibge_code) DO NOTHING
+                """,
+                (code, name, normalized, uf),
+            )
+            cur.execute(
+                """
+                INSERT INTO whatsapp_municipality_aliases
+                    (alias_normalized, ibge_code, alias_kind)
+                VALUES (%s,%s,'OFFICIAL')
+                ON CONFLICT DO NOTHING
+                """,
+                (normalized, code),
+            )
+        conn.commit()
+
+    store = PostgresFreightStore(ingestor_url, RawCipher(b"5" * 32))
+    assert store.resolve_municipality("Sorriso/MT") == (
+        "Sorriso",
+        "MT",
+        "5107925",
+    )
+    assert store.resolve_municipality("Rondonópolis - MT") == (
+        "Rondonópolis",
+        "MT",
+        "5107602",
+    )
+
+    observation = FreightObservation(
+        source_observation_id="postgres-report-1:line:1",
+        source_event_id="postgres-report-1",
+        source_line_number=1,
+        published_at=datetime(2026, 10, 17, 7, 0, tzinfo=UTC),
+        received_at=datetime(2026, 10, 17, 7, 1, tzinfo=UTC),
+        carrier="Rodoviva",
+        origin_city="Sorriso",
+        origin_uf="MT",
+        origin_ibge_code="5107925",
+        destination_city="Rondonópolis",
+        destination_uf="MT",
+        destination_ibge_code="5107602",
+        product="SOJA",
+        loading_point="Fazenda A",
+        rate=175,
+        rate_unit="BRL/t",
+        source_text_sha256="a" * 64,
+        extraction_confidence=0.95,
+    )
+    store.save_observations_and_mark_source(
+        "tenant-report",
+        "fixture",
+        "postgres-report-1",
+        [observation],
+    )
+
+    with psycopg.connect(reporter_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT set_config('app.tenant_id', 'tenant-report', true)")
+        cur.execute(
+            """
+            SELECT origin_ibge_code, destination_ibge_code, rate
+            FROM whatsapp_freight_observations
+            """
+        )
+        assert cur.fetchall() == [(5107925, 5107602, 175)]
+
+        cur.execute("SELECT set_config('app.tenant_id', 'other-tenant', true)")
+        cur.execute("SELECT count(*) FROM whatsapp_freight_observations")
+        assert cur.fetchone()[0] == 0
