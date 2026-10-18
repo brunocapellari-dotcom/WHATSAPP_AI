@@ -79,3 +79,38 @@ def test_persist_closure_writes_both_kinds() -> None:
     assert repo.calls == [
         ("tenant-a", "FullReport", "SimplifiedReport", True)
     ]
+
+
+
+def test_replay_preserves_historical_outage_without_premature_expiry() -> None:
+    """Coverage gaps in prior slots must not count toward three absences."""
+    history = {
+        at(15, 8, 30): True,
+        at(15, 14): False,
+        at(15, 17): False,
+        at(16, 8, 30): True,
+    }
+    report, simple = calculate_closure(
+        at(16, 14), [observation()],
+        collector_healthy=True,
+        historical_health=history,
+    )
+    assert len(report.active_offers) == 1
+    assert simple.total_open_lots == 1
+
+    # Without outages, the 3 healthy missing confirmations expire the offer.
+    report_no_outage, _ = calculate_closure(
+        at(16, 14), [observation()],
+        collector_healthy=True,
+        historical_health={slot: True for slot in history},
+    )
+    assert len(report_no_outage.active_offers) == 0
+
+
+def test_replay_with_missing_historical_coverage_freezes_absences() -> None:
+    report, _ = calculate_closure(
+        at(16, 14), [observation()],
+        collector_healthy=True,
+        historical_health={},
+    )
+    assert len(report.active_offers) == 1
