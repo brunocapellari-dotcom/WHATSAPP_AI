@@ -7,6 +7,7 @@ closure, preventing in-memory state from being mistaken for persisted history.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 
 from .freight_reporting import (
@@ -28,6 +29,7 @@ def calculate_closure(
     observations: Iterable[FreightObservation],
     *,
     collector_healthy: bool,
+    historical_health: Mapping[datetime, bool] | None = None,
 ) -> tuple[FullReport, SimplifiedReport]:
     cutoff = validate_slot(cutoff)
     engine = FreightReportEngine()
@@ -51,7 +53,14 @@ def calculate_closure(
         day += timedelta(days=1)
     full = None
     for slot in slots:
-        full = engine.process(slot, history, collector_healthy=collector_healthy)
+        # Do not retroactively apply the current health result to earlier
+        # closures; doing so can incorrectly expire active freight offers.
+        slot_healthy = (
+            collector_healthy if slot == cutoff else
+            historical_health.get(slot, False) if historical_health is not None else
+            collector_healthy
+        )
+        full = engine.process(slot, history, collector_healthy=slot_healthy)
     assert full is not None
     return full, simplify(full)
 
@@ -63,9 +72,11 @@ def persist_closure(
     observations: Iterable[FreightObservation],
     *,
     collector_healthy: bool,
+    historical_health: Mapping[datetime, bool] | None = None,
 ) -> dict[str, bool]:
     full, simplified = calculate_closure(
-        cutoff, observations, collector_healthy=collector_healthy
+        cutoff, observations, collector_healthy=collector_healthy,
+        historical_health=historical_health,
     )
     # Persist the pair in one transaction before any delivery is queued.
     return repository.save_pair(
