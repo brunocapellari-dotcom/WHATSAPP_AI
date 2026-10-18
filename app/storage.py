@@ -9,6 +9,7 @@ from threading import RLock
 from typing import Protocol
 
 import psycopg
+from psycopg import sql
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .freight_reporting import FreightObservation
@@ -434,11 +435,12 @@ class PostgresFreightStore:
             if value is not None:
                 clauses.append(f"{expression}=%s")
                 params.append(value)
-        query = (
-            "SELECT logical_key, payload FROM whatsapp_freight_events WHERE "
-            + " AND ".join(clauses)
-            + " ORDER BY updated_at DESC"
-        )
+        # SQL identifiers/operators are static allowlisted fragments; dynamic
+        # values remain bound as query parameters, never string-interpolated.
+        query = sql.SQL(
+            "SELECT logical_key, payload FROM whatsapp_freight_events "
+            "WHERE {} ORDER BY updated_at DESC"
+        ).format(sql.SQL(" AND ").join(sql.SQL(clause) for clause in clauses))
         with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(query, params)
