@@ -89,7 +89,7 @@ def parse_freight_lines(text: str, source_id: str) -> list[ParsedFreightLine]:
     product = base.product
     company = base.company_raw
     destination = base.destination_raw
-    unit = None
+    unit: str | None = None
     result: list[ParsedFreightLine] = []
     for line_no, raw_line in enumerate(text.splitlines(), 1):
         line = raw_line.strip()
@@ -101,6 +101,7 @@ def parse_freight_lines(text: str, source_id: str) -> list[ParsedFreightLine]:
         new_product = _detect_product(line)
         if new_product:
             product = new_product
+        line_unit: str | None
         if PER_LOAD.search(line):
             line_unit = "BRL/carga"
         elif PRICE_UNIT.search(line):
