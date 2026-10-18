@@ -1,12 +1,12 @@
 -- Durable freight-report snapshots. Apply after core tenant tables and RLS.
 -- One immutable logical closure per tenant, scheduled local cutoff and report kind.
-DO $
+DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'whatsapp_reporter') THEN
         CREATE ROLE whatsapp_reporter NOLOGIN;
     END IF;
 END
-$;
+$$;
 
 GRANT USAGE ON SCHEMA public TO whatsapp_reporter;
 
