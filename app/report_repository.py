@@ -202,6 +202,20 @@ class ReportSnapshotRepository:
             conn.commit()
         return inserted
 
+    def historical_health(self, tenant_id: str, before: datetime) -> dict[datetime, bool]:
+        """Read immutable prior closure health for deterministic replay."""
+        validate_slot(before)
+        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant_id,))
+            cur.execute(
+                """SELECT cutoff_at, collector_healthy
+                   FROM whatsapp_freight_report_snapshots
+                   WHERE tenant_id=%s AND report_kind='FULL' AND cutoff_at < %s
+                   ORDER BY cutoff_at""",
+                (tenant_id, before),
+            )
+            return {cutoff: bool(healthy) for cutoff, healthy in cur.fetchall()}
+
     def last_cutoff(self, tenant_id: str) -> datetime | None:
         with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
             cur.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant_id,))
