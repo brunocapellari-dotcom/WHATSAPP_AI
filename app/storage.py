@@ -9,8 +9,8 @@ from threading import RLock
 from typing import Protocol
 
 import psycopg
-from psycopg import sql
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from psycopg import sql
 
 from .freight_reporting import FreightObservation
 from .models import FreightEvent, RawInboundEvent
