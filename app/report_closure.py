@@ -60,7 +60,8 @@ def calculate_closure(
             collector_healthy
         )
         full = engine.process(slot, history, collector_healthy=slot_healthy)
-    assert full is not None
+    if full is None:
+        raise RuntimeError("closure generated no report slots")
     return full, simplify(full)
 
 
