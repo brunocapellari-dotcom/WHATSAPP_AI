@@ -415,9 +415,12 @@ def test_atomic_store_method_is_used_for_new_events() -> None:
             super().__init__()
             self.calls = []
 
-        def save_and_enqueue(self, event, logical_key, provider, source_event_id, *, publish=True):
+        def save_and_enqueue(self, event, logical_key, provider, source_event_id, *, publish=True, observations=()):
             self.calls.append((provider, source_event_id, publish))
-            return super().save_and_enqueue(event, logical_key, provider, source_event_id, publish=publish)
+            return super().save_and_enqueue(
+                event, logical_key, provider, source_event_id,
+                publish=publish, observations=observations,
+            )
 
         def save_event(self, event, logical_key):
             assert self.calls, "pipeline must use atomic store API"
