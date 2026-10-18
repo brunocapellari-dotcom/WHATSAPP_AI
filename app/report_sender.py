@@ -15,7 +15,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import httpx
@@ -24,7 +24,6 @@ import psycopg
 logger = logging.getLogger("whatsapp_ai.report_sender")
 PHONE_RE = re.compile(r"^[1-9][0-9]{7,14}$")
 SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-KINDS = {"TEXT", "PDF", "XLSX"}
 
 
 class DeliveryAmbiguous(RuntimeError):
@@ -246,9 +245,11 @@ class ReportSendRepository:
                 return None
             delivery_id = int(row[0])
             kind = str(row[1])
-            body = row[3] if kind == "TEXT" else bytes(row[4] if kind == "PDF" else row[5] or b"")
             if kind == "TEXT":
-                body = row[3] or ""
+                body: str | bytes = str(row[3] or "")
+            else:
+                artifact = row[4] if kind == "PDF" else row[5]
+                body = bytes(artifact) if artifact is not None else b""
             expected = str(row[6] if kind == "PDF" else row[7]) if kind != "TEXT" else None
             cur.execute(
                 """UPDATE whatsapp_report_delivery_parts SET
