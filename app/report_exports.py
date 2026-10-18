@@ -17,7 +17,7 @@ from .freight_reporting import (
 def safe_spreadsheet_text(value: object) -> str:
     """Neutralize cells that spreadsheet applications could execute as formulas."""
     text = str(value).replace("\x00", "").replace("\r", " ").replace("\n", " ")
-    if text.lstrip().startswith(("=", "+", "-", "@", "\t")):
+    if text.startswith("\t") or text.lstrip().startswith(("=", "+", "-", "@")):
         return "'" + text
     return text
 
