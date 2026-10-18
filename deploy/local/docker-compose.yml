@@ -304,6 +304,41 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  report-sender:
+    profiles: ["send"]
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.report_sender"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL_REPORTER: postgresql://whatsapp_report_app:${DB_REPORT_PASSWORD}@postgres:5432/whatsapp_ai
+      WHATSAPP_REPORT_TENANT_ID: ${LOCAL_TENANT_ID}
+      WPP_REPORT_ORIGIN: http://wppconnect:21465
+      WPP_SESSION_NAME: ${WPP_SESSION_NAME}
+      WPP_REPORT_BEARER_TOKEN: ${WPP_REPORT_BEARER_TOKEN:-}
+      REPORT_SENDER_ENABLED: ${REPORT_SENDER_ENABLED:-0}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      wppconnect:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - data_net
+      - provider_net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 networks:
   data_net:
     driver: bridge
