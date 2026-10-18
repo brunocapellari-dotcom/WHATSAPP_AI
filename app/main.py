@@ -7,6 +7,7 @@ import os
 import re
 import time
 import uuid
+from dataclasses import replace
 
 from fastapi import FastAPI, Header, HTTPException, Request, status
 
@@ -43,9 +44,15 @@ app = FastAPI(
 def _report_observation_factory(
     store: PostgresFreightStore,
     event: RawInboundEvent,
+    provider: str,
 ) -> list[FreightObservation]:
+    # Provider-scoped IDs prevent two authorized providers with the same
+    # message ID from silently overwriting each other's report observations.
+    scoped_id = hashlib.sha256(
+        f"{provider}\0{event.source_event_id}".encode("utf-8")
+    ).hexdigest()
     observations, rejected = observations_from_message(
-        source_id=event.source_event_id,
+        source_id=scoped_id,
         text=event.raw_text,
         published_at=event.message_timestamp,
         received_at=utc_now(),
@@ -64,7 +71,9 @@ def _report_observation_factory(
                 sort_keys=True,
             )
         )
-    return observations
+    # Keep the source event ID faithful to the original provider payload;
+    # only the internal observation ID is scoped to the provider.
+    return [replace(item, source_event_id=event.source_event_id) for item in observations]
 
 
 def _store() -> PostgresFreightStore:
@@ -216,5 +225,11 @@ async def provider_event(
         raise HTTPException(status_code=422, detail="malformed provider payload") from exc
 
     _validate_attachments(raw)
-    pipeline = FreightPipeline(_store())
+    store = _store()
+    pipeline = FreightPipeline(
+        store,
+        report_observation_factory=lambda event: _report_observation_factory(
+            store, event, provider
+        ),
+    )
     return pipeline.ingest(x_tenant_id, provider, raw)
