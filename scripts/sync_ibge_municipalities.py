@@ -19,7 +19,7 @@ def _extract_uf(item: dict) -> str | None:
         ("regiao-imediata", "regiao-intermediaria", "UF", "sigla"),
     )
     for path in paths:
-        value = item
+        value: object = item
         for key in path:
             if not isinstance(value, dict):
                 value = None
@@ -75,7 +75,10 @@ def main() -> int:
 
     with psycopg.connect(database_url) as conn, conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM whatsapp_municipalities")
-        current = int(cur.fetchone()[0])
+        count_row = cur.fetchone()
+        if count_row is None:
+            raise RuntimeError("IBGE table count query returned no row")
+        current = int(count_row[0])
         if current >= 5_000 and os.environ.get("IBGE_FORCE_SYNC", "0") != "1":
             print(f"IBGE_MUNICIPALITY_SYNC_SKIP rows={current}")
             return 0
@@ -108,7 +111,10 @@ def main() -> int:
                 (normalized, code),
             )
         cur.execute("SELECT count(*) FROM whatsapp_municipalities")
-        total = int(cur.fetchone()[0])
+        count_row = cur.fetchone()
+        if count_row is None:
+            raise RuntimeError("IBGE table count query returned no row")
+        total = int(count_row[0])
         if total < 5_000:
             raise RuntimeError("canonical municipality table is unexpectedly incomplete")
         conn.commit()
