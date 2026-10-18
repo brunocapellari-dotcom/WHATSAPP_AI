@@ -77,12 +77,14 @@ def main() -> int:
                 )
                 try:
                     history = observations.load_through(tenant_id, cutoff)
+                    historical_health = snapshots.historical_health(tenant_id, cutoff)
                     persisted = persist_closure(
                         snapshots,
                         tenant_id,
                         cutoff,
                         history,
                         collector_healthy=cutoff_healthy,
+                        historical_health=historical_health,
                     )
                     queued = {"FULL": 0, "SIMPLIFIED": 0}
                     if cutoff_healthy:
