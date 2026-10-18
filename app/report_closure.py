@@ -6,8 +6,7 @@ closure, preventing in-memory state from being mistaken for persisted history.
 """
 from __future__ import annotations
 
-from collections.abc import Iterable
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 
 from .freight_reporting import (
