@@ -49,7 +49,7 @@ def _report_observation_factory(
     # Provider-scoped IDs prevent two authorized providers with the same
     # message ID from silently overwriting each other's report observations.
     scoped_id = hashlib.sha256(
-        f"{provider}\0{event.source_event_id}".encode("utf-8")
+        f"{provider}\0{event.source_event_id}".encode()
     ).hexdigest()
     observations, rejected = observations_from_message(
         source_id=scoped_id,
