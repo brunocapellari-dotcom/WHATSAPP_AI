@@ -33,7 +33,7 @@ def serialize_report(report: FullReport | SimplifiedReport) -> tuple[str, str, s
     kind = "FULL" if isinstance(report, FullReport) else "SIMPLIFIED"
     payload = json.dumps(asdict(report), ensure_ascii=False, sort_keys=True,
                          default=_json_default, separators=(",", ":"))
-    markdown = (render_full_markdown(report) if kind == "FULL"
+    markdown = (render_full_markdown(report) if isinstance(report, FullReport)
                 else render_simplified_markdown(report))
     return kind, payload, markdown
 
