@@ -123,7 +123,7 @@ def test_repeated_whatsapp_text_is_not_assumed_to_be_same_physical_load() -> Non
 
 
 def test_bad_timezone_and_empty_export_are_rejected() -> None:
-    with pytest.raises(ValueError, match="IANA"):
+    with pytest.raises(TypeError, match="IANA"):
         parse_authorized_export(
             "19/10/2026 10:00 - C: R$ 100",
             group_id=CHAT,
