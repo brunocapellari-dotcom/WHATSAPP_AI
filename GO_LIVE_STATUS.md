@@ -1,15 +1,19 @@
 # SITUAÇÃO DO GO-LIVE — WHATSAPP AI
 
-**Atualização:** 18/10/2026  
+**Atualização:** 19/10/2026  
 **PR de implantação:** #18 (branch `feat/relatorios-fretes-mt-2026-10-15`)  
 **Estado:** NÃO está em produção. Não realizar merge ou enviar mensagens reais sem os gates abaixo.
 
 ## Meta operacional aprovada
 
-O WhatsApp AI deve coletar informações autorizadas do WhatsApp, preservar evidências,
-gerar resumos breves de notícias (sem análise adicional), e produzir relatórios de
-fretes de Mato Grosso — completo três vezes ao dia e simplificado com deduplicação
-por ponto de carregamento, origem e destino. O WhatsApp AI não depende do NIVON.
+**ESCOPO CONGELADO (19/10/2026): somente fretes de Mato Grosso.**
+O WhatsApp AI deve coletar anúncios de frete de grupos e fontes WhatsApp autorizados,
+preservar as evidências e produzir dois relatórios: completo três vezes ao dia e
+simplificado com deduplicação por ponto de carregamento, origem e destino.
+Não implementar ou implantar coletores de notícias, política, geopolítica,
+meteorologia ou resumos editoriais nesta fase. A branch de notícias (PR #19)
+foi encerrada sem merge, preservando histórico para eventual decisão futura.
+O WhatsApp AI não depende do NIVON.
 
 **Execução 24 horas na nuvem, mesmo com o notebook desligado, com custo de
 implantação e manutenção idealmente zero.** Compose local é ambiente de
@@ -43,19 +47,19 @@ ativado sem autorização expressa.
 | Servidor 24h com custo aprovado | **PENDENTE DE AÇÃO HUMANA** | VM/conta existente ou instância Always Free confirmada, sem cobranças |
 | WPPConnect ARM64, se servidor ARM | NÃO HOMOLOGADO | Build, Chromium, sessão e reinício real na arquitetura escolhida |
 | Número WhatsApp dedicado autorizado | **PENDENTE DE AÇÃO HUMANA** | Pareamento QR realizado privadamente |
-| Coleta de Canais do WhatsApp | NÃO HOMOLOGADA | Duas publicações reais de Canal identificado, com consentimento e sem método proibido |
-| Fontes/grupos autorizados | PENDENTE | Lista de identificadores autorizados e ingestão real |
+| Grupos e fontes de fretes autorizados | PENDENTE | Lista de identificadores autorizados e ingestão de anúncios de fretes reais |
 | Destinatários consentidos | PENDENTE | Registro administrativo de consentimento, telefone/transportes permitidos |
 | Token WPP e saída | PENDENTE | Envio autorizado real, confirmação de ID de texto, PDF e XLSX |
-| Resumo breve de notícias | NÃO HOMOLOGADO | Testes com mensagens reais, sem fabricar conteúdo nem análise |
 | Relatórios MT completos e simplificados | CÓDIGO DISPONÍVEL, NÃO HOMOLOGADO | Dados reais, três horários, lotes deduplicados, totais por origem/destino |
 | Backup cifrado e restauração em servidor | PENDENTE | Restore drill recuperável e evidenciado |
 | Segurança operacional da VM | PENDENTE | SSH por chave, rede privada, monitoramento, alertas, restart e recuperação |
 | Retomada após falha e E2E | PENDENTE | Coletar → persistir → fechar → enviar em dois ciclos reais |
 
-**Atenção:** serviço baseado em WhatsApp Web não garante acesso irrestrito a
-Canais nem substitui validação de autorização e conformidade. Sem prova real
-de coleta de Canais, não divulgar essa funcionalidade como operacional.
+**Atenção:** WhatsApp Web não garante leitura de Canais. O go-live
+prioriza **grupos de fretes com acesso autorizado**, sem transformar Canais
+genéricos em bloqueador do produto. Se futuramente houver canal específico
+de fretes aprovado como fonte, sua coleta exige homologação própria antes de
+ser anunciada como operacional. Não contornar permissões ou termos de uso.
 
 ## Dependência humana mínima
 
