@@ -10,6 +10,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 
 from .freight_reporting import (
+    MAX_LIVE_COLLECTION_LAG,
     MT_TIMEZONE,
     REPORT_TIMES,
     FreightObservation,
@@ -34,8 +35,17 @@ def calculate_closure(
     engine = FreightReportEngine()
     # Replay all historical publication slots in order; processing only the
     # target slot would discard prior open offers and expiry state.
-    history = list(observations)
-
+    history = [
+        item
+        for item in observations
+        if (
+            item.received_at is None
+            or item.received_at.astimezone(MT_TIMEZONE) - report_slot(item.published_at)
+            <= MAX_LIVE_COLLECTION_LAG
+        )
+    ]
+    # A year-old import is archival; including it in live replay would
+    # artificially reopen old loads and potentially exceed the replay cap.
     earliest = min((report_slot(o.published_at) for o in history
                     if report_slot(o.published_at) <= cutoff), default=cutoff)
     day = earliest.astimezone(MT_TIMEZONE).date()
