@@ -14,8 +14,8 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
 
-from defusedxml import ElementTree as SafeET
 import httpx
+from defusedxml import ElementTree as SafeET
 from pydantic import (
     BaseModel,
     ConfigDict,
