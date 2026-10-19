@@ -178,7 +178,6 @@ def test_does_not_assume_missing_publication_dates() -> None:
     feed = RSS.replace(
         b"<pubDate>Mon, 19 Oct 2026 11:12:00 GMT</pubDate>",
         b"",
-        1,
     )
     assert all(x.event_id != "id-soja" for x in parse_feed(feed))
 
