@@ -16,7 +16,6 @@ from app.news_collection import (
     select_news,
 )
 
-
 CONFIG_FILE = (
     Path(__file__).resolve().parents[1] / "config" / "news_collection.example.json"
 )
