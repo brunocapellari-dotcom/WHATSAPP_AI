@@ -120,7 +120,8 @@ def test_price_can_change_several_times_but_keeps_one_offer() -> None:
     ])
     assert len(full.active_offers) == 1
     assert [m.delta for m in full.movements] == [4, 4, -1]
-    assert full.active_offers[0].rate == 180
+    # Consolidated rate is the highest advertised, not necessarily the latest.
+    assert full.active_offers[0].rate == 181
     assert simplify(full).total_open_lots == 1
 
 
@@ -294,3 +295,58 @@ def test_recent_out_of_order_message_does_not_reset_confirmed_absences() -> None
     final = engine.process(dt(16, 8, 30), [])
     assert final.expired_offers == 1
     assert final.active_offers == ()
+
+
+
+def test_later_lower_freight_preserves_higher_announcement_per_carrier() -> None:
+    engine = FreightReportEngine()
+    engine.process(dt(15, 8, 30), [
+        offer("first-a", "Rodoviva", rate="210", published=dt(15, 7)),
+        offer("first-b", "Fibra Forte", rate="195", published=dt(15, 7)),
+    ])
+    report = engine.process(dt(15, 14), [
+        offer("later-a", "Rodoviva", rate="190", published=dt(15, 9)),
+        offer("later-b", "Fibra Forte", rate="180", published=dt(15, 9)),
+    ])
+    consolidated = {item.carrier: item.rate for item in report.active_offers}
+    assert consolidated == {"Rodoviva": 210, "Fibra Forte": 195}
+    assert len(report.movements) == 2
+    assert sorted(move.delta for move in report.movements) == [-20, -15]
+    # Original lower values stay in chronological movement evidence.
+    assert {move.after for move in report.movements} == {190, 180}
+    assert simplify(report).rows[0].rate_display == "R$ 195,00–210,00/t"
+
+
+def test_older_high_announcement_does_not_extend_offer_lifetime() -> None:
+    from dataclasses import replace
+
+    engine = FreightReportEngine()
+    engine.process(dt(15, 8, 30), [
+        offer("newer-first", "Rodoviva", rate="180", published=dt(15, 7))
+    ])
+    engine.process(dt(15, 14), [])
+    older_expensive = replace(
+        offer("older-expensive", rate="220", published=dt(15, 6)),
+        received_at=dt(15, 15),
+    )
+    report = engine.process(dt(15, 17), [older_expensive])
+    assert report.active_offers[0].rate == 220
+    assert report.reconfirmed_offers == 0
+    assert report.movements == ()
+    # Existing absence count was not reset by the older publication.
+    assert engine.process(dt(16, 8, 30), []).expired_offers == 1
+
+
+def test_after_expiry_new_load_starts_new_highest_price_sequence() -> None:
+    engine = FreightReportEngine()
+    engine.process(dt(15, 8, 30), [
+        offer("first", "Rodoviva", rate="240", published=dt(15, 7))
+    ])
+    engine.process(dt(15, 14), [])
+    engine.process(dt(15, 17), [])
+    assert engine.process(dt(16, 8, 30), []).expired_offers == 1
+    reappeared = engine.process(dt(16, 14), [
+        offer("newload", "Rodoviva", rate="190", published=dt(16, 9))
+    ])
+    assert len(reappeared.active_offers) == 1
+    assert reappeared.active_offers[0].rate == 190
