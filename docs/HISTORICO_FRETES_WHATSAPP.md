@@ -78,3 +78,49 @@ dos registros selecionados. **Não prova integridade nem completude do históric
 
 **Até esses gates serem cumpridos, não afirmar que o coletor recupera
 automaticamente histórico de conversas antigas.**
+
+## Avanço técnico de 19/10/2026 — exportação TXT e quarentena operacional
+
+O código agora também contém:
+
+- `app/history_export.py`: leitor somente em memória de exportações .txt de
+  grupos autorizados em formato brasileiro de data com ano de quatro dígitos.
+  Mantém a data da mensagem e a origem atribuída pelo operador; rejeita
+  entradas sem data verificável e mensagens grandes, sem adivinhar campos.
+- `app/history_export_audit.py`: conta mensagens, linhas com indícios de frete,
+  campos incompletos e republicações prováveis, sem apresentar conteúdo,
+  contatos ou fretes individuais. As contagens são **candidatos**, não
+  número de lotes comprovados e não cotações negociadas.
+- `scripts/audit_whatsapp_export.py`: auditoria local de um arquivo .txt
+  autorizado, exigindo o identificador do grupo na variável de permissão
+  `WPP_ALLOWED_CHAT_IDS`, sem conexão ao banco ou à internet.
+- Regras em `app/freight_reporting.py` e `app/report_closure.py` que
+  **excluem da apuração operacional** mensagens recuperadas depois de mais
+  de 24 horas do primeiro horário de relatório elegível. São preserváveis
+  para análise histórica, mas não podem reabrir fretes antigos nos
+  relatórios atuais. Mensagens anteriores à última atualização registrada
+  também não prolongam a validade de cargas.
+
+Exemplo, **somente em ambiente privado com exportação autorizada**:
+
+```bash
+WPP_ALLOWED_CHAT_IDS='12345@g.us' python -m scripts.audit_whatsapp_export \
+  --file /caminho/privado/exportacao.txt --group-id '12345@g.us'
+```
+
+O identificador acima é fictício. A saída inclui somente contagens, horários
+mínimo/máximo e checksum. Não copie o conteúdo dos grupos para GitHub ou CI.
+
+### Limites importantes
+
+Esta auditoria não salva mensagens em um banco histórico. A exportação não traz
+IDs originais estáveis de mensagens; os identificadores gerados são válidos para
+a mesma exportação e impressões digitais de conteúdo são **indícios** de
+republicação, não identidade comprovada de uma carga. Grupos exportados com
+formato regional diferente exigem adaptador específico e teste. A entrada
+histórica permanente permanece pendente e deverá ter isolamento, controle
+de acesso, proveniência e revisão antes de qualquer relatório retrospectivo.
+
+A regra de 24 horas é de **segurança operacional**, não uma regra de validade
+de fretes negociados: anúncios atrasados ficam fora do consolidado atual até
+haver revisão, em vez de serem presumidos vigentes.
