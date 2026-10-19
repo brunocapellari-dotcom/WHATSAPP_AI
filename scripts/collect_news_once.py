@@ -24,15 +24,17 @@ def load_policy(path: Path) -> NewsCollectionPolicy:
     return NewsCollectionPolicy.model_validate_json(path.read_bytes())
 
 
-def collect_once(policy: NewsCollectionPolicy) -> list[dict[str, object]]:
+def collect_once(policy: NewsCollectionPolicy) -> tuple[list[dict[str, object]], int]:
     """Returns candidate records only, with no durable or remote side effects."""
     items: list[dict[str, object]] = []
+    failures = 0
     for source in policy.sources:
         if not source.enabled:
             continue
         try:
             selected = collect_feed(source, policy)
         except (httpx.HTTPError, ValueError) as exc:
+            failures += 1
             # Do not print possibly attacker-controlled response text/URLs.
             print(
                 f"news source failed: {source.source_id} ({type(exc).__name__})",
@@ -46,7 +48,7 @@ def collect_once(policy: NewsCollectionPolicy) -> list[dict[str, object]]:
                     "article": article.model_dump(mode="json"),
                 }
             )
-    return items
+    return items, failures
 
 
 def main() -> int:
@@ -54,9 +56,10 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True)
     args = parser.parse_args()
     policy = load_policy(args.config)
-    for article in collect_once(policy):
+    items, failures = collect_once(policy)
+    for article in items:
         print(json.dumps(article, ensure_ascii=False, sort_keys=True))
-    return 0
+    return 2 if failures else 0
 
 
 if __name__ == "__main__":
