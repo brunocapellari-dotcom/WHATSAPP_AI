@@ -6,6 +6,8 @@ closure, preventing in-memory state from being mistaken for persisted history.
 """
 from __future__ import annotations
 
+from bisect import bisect_left
+from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 
@@ -46,12 +48,20 @@ def calculate_closure(
     ]
     # A year-old import is archival; including it in live replay would
     # artificially reopen old loads and potentially exceed the replay cap.
-    earliest = min((report_slot(o.published_at) for o in history
-                    if report_slot(o.published_at) <= cutoff), default=cutoff)
+    # A rolling window prevents unbounded historical replay as the database
+    # ages. Old records remain stored for the separate historical archive;
+    # they cannot indefinitely keep old commercial offers open.
+    replay_floor = cutoff - timedelta(days=365)
+    history = [
+        item for item in history
+        if report_slot(item.published_at) >= replay_floor
+        and report_slot(item.published_at) <= cutoff
+    ]
+    earliest = min(
+        (report_slot(item.published_at) for item in history), default=cutoff
+    )
     day = earliest.astimezone(MT_TIMEZONE).date()
     end_day = cutoff.astimezone(MT_TIMEZONE).date()
-    if (end_day - day).days > 365:
-        raise ValueError("historical replay exceeds one-year safety limit")
     slots = []
     while day <= end_day:
         for hour, minute in sorted(REPORT_TIMES):
@@ -60,6 +70,18 @@ def calculate_closure(
             if earliest <= slot <= cutoff:
                 slots.append(slot)
         day += timedelta(days=1)
+    # Each source observation is offered to the engine at its FIRST eligible
+    # closure, not repeatedly at every later cutoff. The engine still checks
+    # source IDs, and receipt time is never allowed to backdate availability.
+    by_slot: dict[datetime, list[FreightObservation]] = defaultdict(list)
+    for item in history:
+        ready = report_slot(item.published_at)
+        if item.received_at is not None:
+            ready = max(ready, item.received_at.astimezone(MT_TIMEZONE))
+        offset = bisect_left(slots, ready)
+        if offset < len(slots):
+            by_slot[slots[offset]].append(item)
+
     full = None
     for slot in slots:
         # Do not retroactively apply the current health result to earlier
@@ -69,7 +91,9 @@ def calculate_closure(
             historical_health.get(slot, False) if historical_health is not None else
             collector_healthy
         )
-        full = engine.process(slot, history, collector_healthy=slot_healthy)
+        full = engine.process(
+            slot, by_slot.get(slot, ()), collector_healthy=slot_healthy
+        )
     if full is None:
         raise RuntimeError("closure generated no report slots")
     return full, simplify(full)
