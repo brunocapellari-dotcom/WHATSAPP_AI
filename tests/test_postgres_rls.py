@@ -44,6 +44,7 @@ def database_roles() -> tuple[str, str]:
             "003_upgrade_existing.sql",
             "004_scope_worker_tenant.sql",
             "005_freight_event_history.sql",
+            "012_rate_change_json_null_view.sql",
         }
     )
     assert apply_migrations(ADMIN_URL) == []
