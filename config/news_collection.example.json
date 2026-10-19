@@ -1,0 +1,56 @@
+{
+  "topics": [
+    {
+      "topic_id": "soja",
+      "display_name": "Soja",
+      "include_terms": [
+        "soja",
+        "soybean",
+        "soybeans"
+      ],
+      "exclude_terms": []
+    },
+    {
+      "topic_id": "milho",
+      "display_name": "Milho",
+      "include_terms": [
+        "milho",
+        "corn"
+      ],
+      "exclude_terms": []
+    },
+    {
+      "topic_id": "fertilizantes",
+      "display_name": "Fertilizantes",
+      "include_terms": [
+        "fertilizante",
+        "fertilizantes",
+        "ureia",
+        "potassio"
+      ],
+      "exclude_terms": []
+    },
+    {
+      "topic_id": "diesel",
+      "display_name": "Diesel",
+      "include_terms": [
+        "oleo diesel",
+        "preco do diesel",
+        "diesel"
+      ],
+      "exclude_terms": []
+    },
+    {
+      "topic_id": "portos",
+      "display_name": "Portos",
+      "include_terms": [
+        "embarque portuario",
+        "porto de santos",
+        "porto de paranagua",
+        "line-up"
+      ],
+      "exclude_terms": []
+    }
+  ],
+  "sources": []
+}
