@@ -50,3 +50,34 @@ para bloquear DNS rebinding ou conexões indevidas.
 
 Não associar, ativar nem fazer requisições a qualquer fonte antes de sua
 aprovação. A nova implementação não é um serviço 24 horas em produção.
+
+## Assuntos aprovados em 19/10/2026
+
+O usuário definiu estes assuntos para a coleta, independente do cadastro das
+fontes: política/geopolítica com vínculo ao preço das commodities, combustíveis,
+produção e custos produtivos; safra de soja, milho e algodão; boi gordo e
+bezerro; meteorologia e previsão do tempo.
+
+O arquivo config/news_collection.example.json contém dez classificações:
+politica_geopolitica, safra_soja, safra_milho, safra_algodao, boi_gordo,
+bezerro, combustiveis, custos_producao, meteorologia e previsao_tempo.
+
+Para política/geopolítica não basta mencionar um evento político. O filtro
+exige simultaneamente: (1) um termo político/geopolítico explícito, (2) vínculo
+textual com commodity, agro, energia, câmbio, insumos ou logística, e (3) termo
+explícito de preço, produção, oferta, demanda, custo ou outra consequência de
+mercado. Para safras é obrigatória a coocorrência de cultura e termo de
+plantio, colheita, produção, produtividade, lavoura ou relatório de safra.
+
+**Limite metodológico:** coocorrência textual não comprova relação de
+causalidade. O filtro é apenas seleção preliminar: um controle editorial
+posterior deve rejeitar notícias que citem termos sem descrever uma ligação
+material plausível. Não atribuir impacto não informado pela fonte.
+
+Meteorologia e previsão do tempo são editorias distintas; notícias
+meteorológicas não constituem previsões meteorológicas próprias. Não gerar
+previsões ou valores sem origem e data de validade declaradas.
+
+Nenhum provedor foi ativado: sources permanece vazio. As fontes, condições de
+uso e destinatários para a distribuição ainda precisam ser definidos. O
+monitoramento permanece separado dos relatórios de fretes.
