@@ -14,9 +14,16 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
 
-import httpx
 from defusedxml import ElementTree as SafeET
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
+import httpx
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    field_validator,
+    model_validator,
+)
 
 from .news_delivery_format import NewsDispatchItem
 
@@ -148,7 +155,7 @@ def _date(value: str) -> datetime | None:
         timestamp = parsedate_to_datetime(value)
     except (ValueError, TypeError, IndexError):
         try:
-            timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            timestamp = datetime.fromisoformat(value)
         except ValueError:
             return None
     if timestamp.tzinfo is None or timestamp.utcoffset() is None:
@@ -284,25 +291,33 @@ def collect_feed(
     if urlsplit(url).hostname != original_host:
         raise ValueError("feed host mismatch")
     body = bytearray()
-    with httpx.Client(
-        transport=transport,
-        timeout=httpx.Timeout(10.0, connect=5.0),
-        follow_redirects=False,
-        trust_env=False,
-    ) as client:
-        with client.stream("GET", url, headers={"Accept": "application/rss+xml, application/atom+xml, application/xml"}) as response:
-            if response.status_code != 200:
-                raise ValueError(f"RSS/Atom source returned HTTP {response.status_code}")
-            content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
-            if content_type not in {
-                "application/rss+xml",
-                "application/atom+xml",
-                "application/xml",
-                "text/xml",
-            }:
-                raise ValueError("news source did not serve an XML feed")
-            for chunk in response.iter_bytes():
-                body.extend(chunk)
-                if len(body) > MAX_FEED_BYTES:
-                    raise ValueError("feed exceeds allowed response size")
+    with (
+        httpx.Client(
+            transport=transport,
+            timeout=httpx.Timeout(10.0, connect=5.0),
+            follow_redirects=False,
+            trust_env=False,
+        ) as client,
+        client.stream(
+            "GET",
+            url,
+            headers={
+                "Accept": "application/rss+xml, application/atom+xml, application/xml"
+            },
+        ) as response,
+    ):
+        if response.status_code != 200:
+            raise ValueError(f"RSS/Atom source returned HTTP {response.status_code}")
+        content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+        if content_type not in {
+            "application/rss+xml",
+            "application/atom+xml",
+            "application/xml",
+            "text/xml",
+        }:
+            raise ValueError("news source did not serve an XML feed")
+        for chunk in response.iter_bytes():
+            body.extend(chunk)
+            if len(body) > MAX_FEED_BYTES:
+                raise ValueError("feed exceeds allowed response size")
     return select_news(policy, source.source_id, parse_feed(bytes(body)))
