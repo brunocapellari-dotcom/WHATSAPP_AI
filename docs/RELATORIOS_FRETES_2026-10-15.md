@@ -25,9 +25,16 @@ coletor apresentar falha de cobertura, não consumir uma ausência. Encerrar por
 ausência não comprova o cancelamento físico da carga.
 
 O relatório completo contém transportadoras individuais, origem, fazenda,
-destino, produto, último frete, reajustes R$ e %, lista de ofertas ativas e
+destino, produto, maior frete anunciado pela mesma transportadora sob condições equivalentes, reajustes R$ e %, lista de ofertas ativas e
 consolidação de ofertas por município de origem e transportadora. A mudança
 de preço de uma transportadora não modifica o registro das concorrentes.
+
+O valor do consolidado é o **maior anúncio observado** da transportadora para
+o mesmo ponto de embarque, destino, produto, unidade e demais condições
+comerciais compatíveis enquanto a oferta está ativa. O valor menor e sua
+proveniência continuam no histórico cronológico de reajustes; o maior anúncio
+**não** deve ser apresentado como comprovadamente o mais recente. Reabertura
+após expiração inicia uma nova sequência de anúncios.
 
 A comparação com ANTT depende de distância, classificação de carga,
 operação, eixos e normas/coeficientes históricos validados. **Não implementar
