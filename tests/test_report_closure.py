@@ -114,3 +114,47 @@ def test_replay_with_missing_historical_coverage_freezes_absences() -> None:
         historical_health={},
     )
     assert len(report.active_offers) == 1
+
+
+
+def test_archival_backfill_does_not_enter_current_replay_or_break_one_year_limit() -> None:
+    from dataclasses import replace
+
+    # Publication years earlier but recovered today: it is searchable history,
+    # not an active freight offer, nor a reason to run years of live closures.
+    old = replace(
+        observation(),
+        published_at=datetime(2024, 10, 15, 7, tzinfo=MT_TIMEZONE),
+        received_at=at(19, 7),
+    )
+    live = replace(
+        observation(),
+        source_observation_id="newer",
+        published_at=at(19, 7),
+        received_at=at(19, 7, 10),
+    )
+    full, simple = calculate_closure(
+        at(19, 8, 30),
+        [old, live],
+        collector_healthy=True,
+    )
+    assert len(full.active_offers) == 1
+    assert full.active_offers[0].source_observation_id == "newer"
+    assert simple.total_open_lots == 1
+
+
+def test_archival_only_backfill_yields_empty_current_report() -> None:
+    from dataclasses import replace
+
+    old = replace(
+        observation(),
+        published_at=datetime(2020, 10, 15, 7, tzinfo=MT_TIMEZONE),
+        received_at=at(19, 7),
+    )
+    full, simple = calculate_closure(
+        at(19, 8, 30),
+        [old],
+        collector_healthy=False,
+    )
+    assert full.active_offers == ()
+    assert simple.total_open_lots == 0
