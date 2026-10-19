@@ -158,3 +158,78 @@ def test_archival_only_backfill_yields_empty_current_report() -> None:
     )
     assert full.active_offers == ()
     assert simple.total_open_lots == 0
+
+
+
+def test_old_valid_realtime_history_is_bounded_in_current_live_replay() -> None:
+    from dataclasses import replace
+
+    old = replace(
+        observation(),
+        published_at=datetime(2024, 10, 15, 7, tzinfo=MT_TIMEZONE),
+        received_at=datetime(2024, 10, 15, 7, tzinfo=MT_TIMEZONE),
+    )
+    live = replace(
+        observation(),
+        source_observation_id="live-2026",
+        published_at=at(19, 7),
+        received_at=at(19, 7, 10),
+    )
+    result, simple = calculate_closure(
+        at(19, 8, 30), [old, live], collector_healthy=True
+    )
+    assert len(result.active_offers) == 1
+    assert result.active_offers[0].source_observation_id == "live-2026"
+    assert simple.total_open_lots == 1
+
+
+def test_closure_uses_each_observation_once_instead_of_reprocessing_all(
+    monkeypatch,
+) -> None:
+    from dataclasses import replace
+
+    from app.freight_reporting import FreightReportEngine
+
+    original = FreightReportEngine.process
+    total_items = []
+
+    def spy(self, cutoff, observations, *, collector_healthy=True):
+        batch = tuple(observations)
+        total_items.extend(item.source_observation_id for item in batch)
+        return original(self, cutoff, batch, collector_healthy=collector_healthy)
+
+    monkeypatch.setattr(FreightReportEngine, "process", spy)
+    items = [
+        replace(
+            observation(),
+            source_observation_id=f"event-{i}",
+            published_at=at(15, 7),
+            received_at=at(15, 7, 10),
+        )
+        for i in range(30)
+    ]
+    calculate_closure(at(17, 17), items, collector_healthy=False)
+    assert sorted(total_items) == sorted(f"event-{i}" for i in range(30))
+
+
+def test_late_arrival_is_replayed_at_receipt_eligible_slot_not_publication_slot() -> None:
+    from dataclasses import replace
+
+    sample = replace(
+        observation(),
+        published_at=at(19, 7),
+        received_at=at(19, 14, 30),
+    )
+    morning, _ = calculate_closure(
+        at(19, 8, 30), [sample], collector_healthy=True
+    )
+    afternoon, _ = calculate_closure(
+        at(19, 14), [sample], collector_healthy=True
+    )
+    evening, _ = calculate_closure(
+        at(19, 17), [sample], collector_healthy=True
+    )
+    assert morning.active_offers == ()
+    assert afternoon.active_offers == ()
+    assert len(evening.active_offers) == 1
+    assert evening.active_offers[0].source_observation_id == "report-1"
