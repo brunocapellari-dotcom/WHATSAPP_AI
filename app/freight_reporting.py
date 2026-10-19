@@ -18,6 +18,9 @@ from zoneinfo import ZoneInfo
 
 MT_TIMEZONE = ZoneInfo("America/Cuiaba")
 REPORT_TIMES = {(8, 30), (14, 0), (17, 0)}
+# A message recovered long after its first eligible report is archival-only.
+# Operational reports must not reopen an old cargo because it was imported today.
+MAX_LIVE_COLLECTION_LAG = timedelta(hours=24)
 
 
 def _norm(value: str | None) -> str:
@@ -393,7 +396,14 @@ class FreightReportEngine:
                 continue
             # Do not use messages received after the published report, or messages
             # whose assigned first report has not yet been reached.
-            if report_slot(o.published_at) > cutoff or (o.received_at and _local(o.received_at) > cutoff):
+            first_slot = report_slot(o.published_at)
+            if first_slot > cutoff or (o.received_at and _local(o.received_at) > cutoff):
+                continue
+            # Old WhatsApp messages recovered by a later sync/import may
+            # support historical analysis, but cannot become live cargo today.
+            # Production ingress always records received_at independently.
+            if o.received_at and _local(o.received_at) - first_slot > MAX_LIVE_COLLECTION_LAG:
+                self._observations.add(o.source_observation_id)
                 continue
             self._observations.add(o.source_observation_id)
             if report_slot(o.published_at) == cutoff:
@@ -415,9 +425,10 @@ class FreightReportEngine:
                 prior.last_seen = _local(o.published_at)
                 prior.absences = 0
                 reconfirmed.add(key)
-            # A delayed-but-newly-observed message still reconfirms the offer
-            # at this report; it must not immediately count as an absence.
-            observed_keys.add(key)
+            # A message older than the most recently confirmed publication
+            # cannot reconfirm the cargo and erase recorded absences.
+            if prior is None or _local(o.published_at) >= prior.last_seen:
+                observed_keys.add(key)
         expired = 0
         for key, state in list(self._offers.items()):
             if key in observed_keys or key in new:
