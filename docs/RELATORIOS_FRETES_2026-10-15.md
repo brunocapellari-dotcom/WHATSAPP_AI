@@ -61,35 +61,49 @@ precisam ficar identificadas, sem conversão arbitrária.
 O total de lotes únicos, a soma por origens e a soma por destinos devem
 conciliar exatamente.
 
-## Estado do desenvolvimento nesta branch
+## Estado do desenvolvimento nesta branch — revisão de 19/10/2026
 
-**Disponível em código, mas ainda não integrado à operação real:**
+**Construído e testado em código (ainda sem homologação com WhatsApp real):**
 
-- app/freight_reporting.py — cortes, variações, ausência após três
-  fechamentos, consolidação por transportadora, agrupamento por carga,
-  origem MT e totalizadores; gera os dois modelos em Markdown.
-- app/freight_multi_parser.py — extrai múltiplas linhas de fretes com
-  destino e produto herdados dos cabeçalhos sem inventar município/UF.
-- tests/test_freight_reporting.py e tests/test_freight_multi_parser.py —
-  cenários de regressão e deduplicação.
+- Extração de múltiplas ofertas e normalização municipal conforme dados IBGE.
+- Persistência de observações, separação por transportadora, deduplicação de
+  registros e reconciliação conservadora de lotes.
+- Dois relatórios, snapshots imutáveis, geração de PDF/XLSX, agendador de
+  três horários em Mato Grosso, fila de distribuição com consentimento.
+- Eventos brutos cifrados, escopo tenant, fila resistente a reenvios e
+  controles de saúde do coletor.
+- Prévia da coleta histórica e auditoria local de exportação de conversas
+  autorizadas em TXT, sem promover mensagens antigas a anúncios atuais.
+- Replay operacional com processamento de cada observação no primeiro
+  fechamento elegível, histórico limitado a 365 dias e exclusão de mensagens
+  recuperadas mais de 24 horas após seu primeiro fechamento elegível.
+  Publicações fora de ordem não prolongam validade de ofertas.
+- Testes unitários e integração PostgreSQL no CI do GitHub.
 
-**Pendências até publicação automática e go-live:**
+**Pendências de homologação e go-live:**
 
-1. Integrar multi-extração à API e à ingestão existente, gravando múltiplos
-   eventos provenientes de uma mensagem com identificadores idempotentes.
-2. Validar nomes de municípios e respectivas UFs com cadastro canônico;
-   não presumir MT em cidades de nome ambíguo.
-3. Persistir observações, estado de ausências, cobertura e snapshots
-   imutáveis no PostgreSQL com controle de acesso por tenant.
-4. Corrigir atomicidade de evento, outbox e marcação do evento de origem;
-   eliminar dependência de matching por apenas 100 eventos recentes.
-5. Implementar agendador robusto, PDF e XLSX do completo e resumo compacto
-   do simplificado; garantir reprodução exata de relatório já emitido.
-6. Enviar relatórios aos contatos explicitamente autorizados e configurados
-   com fila durável, controle de idempotência e confirmação de entrega.
-   Testar compatibilidade do método de envio com o WhatsApp.
-7. Integrar piso ANTT versionado; homologar o fluxo real ponta a ponta,
-   backup/restauração e desempenho sob milhares de linhas.
+1. Servidor 24 horas, dentro de limite Always Free comprovado e com backup
+   externo seguro; compatibilidade ARM64 do WPPConnect com QR e reinicialização.
+2. Aprovação explícita de grupos de frete autorizados, pareamento do número
+   dedicado e prova de recebimento real em sessões autorizadas.
+3. Homologar funcionamento contínuo, filas e relatórios de três fechamentos
+   reais, com mensagens multioferta, valores de transportadoras separadas
+   e contagem de lotes consistente.
+4. Homologar PDF/XLSX e envio de teste somente a destinatários consentidos,
+   com reconhecimento de entrega e prevenção de duplicatas.
+5. Restaurar backup cifrado em ambiente isolado e provar recuperação após
+   queda de serviço ou reinicialização.
+6. Para histórico anterior ao pareamento: testar se WPPConnect realmente
+   expõe mensagens antigas na versão implantada; exportações TXT serão
+   auditadas separadamente e não ingressam automaticamente no banco ativo.
+7. Integração com piso ANTT somente após dados técnicos e parâmetros
+   históricos suficientes; não inventar comparações.
 
-**Segurança/custos:** não implantar sem validação, não ativar serviços pagos,
-não expor segredos, números de telefone, QR ou mensagens privadas no GitHub.
+**Limites:** deduplicação inferida sem ID inequívoco não comprova quantidade
+física de cargas; ausência de anúncios não prova falta de ofertas quando
+a fonte esteve indisponível. Valores são anúncios, não operações concluídas.
+Não calcular média municipal de fretes.
+
+**Segurança e custos:** não implantar sem homologação; não ativar serviços
+pagos; não colocar números, QR, tokens, chaves ou mensagens privadas no GitHub.
+O PR #18 permanece em validação, não se trata de go-live real.
