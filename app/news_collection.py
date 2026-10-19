@@ -12,6 +12,7 @@ import unicodedata
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
@@ -139,11 +140,7 @@ def _plain(value: str) -> str:
     return " ".join(" ".join(parser.parts).split())[:2000]
 
 
-def _element_text(element: object, name: str) -> str:
-    from xml.etree.ElementTree import Element
-
-    if not isinstance(element, Element):
-        return ""
+def _element_text(element: Any, name: str) -> str:
     child = element.find(name)
     return ("".join(child.itertext()) if child is not None else "").strip()
 
