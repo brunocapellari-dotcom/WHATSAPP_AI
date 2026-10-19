@@ -64,7 +64,7 @@ def _timestamp(date_text: str, time_text: str, timezone: ZoneInfo) -> datetime:
 
 
 def _content_id(group_id: str, when: datetime, sender: str, body: str) -> str:
-    data = "\x00".join((group_id, when.isoformat(), sender, body))
+    data = f"{group_id}\x00{when.isoformat()}\x00{sender}\x00{body}"
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
@@ -86,7 +86,7 @@ def parse_authorized_export(
     if group_id not in approved_group_ids or not group_id.endswith("@g.us"):
         raise ValueError("export is not from an authorized WhatsApp group")
     if not isinstance(timezone, ZoneInfo):
-        raise ValueError("an explicit IANA timezone is required")
+        raise TypeError("an explicit IANA timezone is required")
     size = len(contents.encode("utf-8"))
     if size == 0 or size > MAX_EXPORT_BYTES:
         raise ValueError("export size is outside accepted range")
