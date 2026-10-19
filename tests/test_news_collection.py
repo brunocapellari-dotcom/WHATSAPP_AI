@@ -17,7 +17,6 @@ from app.news_collection import (
 )
 from app.news_delivery_format import news_idempotency_key, news_row
 
-
 RSS = b"""<?xml version="1.0"?>
 <rss version="2.0"><channel><title>Fonte de teste</title>
 <item><title>Soja: compras chinesas no radar</title>
