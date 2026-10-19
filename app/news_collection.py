@@ -70,6 +70,16 @@ class NewsTopicRule(BaseModel):
     display_name: str = Field(min_length=1, max_length=40)
     include_terms: list[str] = Field(min_length=1, max_length=80)
     exclude_terms: list[str] = Field(default_factory=list, max_length=80)
+    required_term_groups: list[list[str]] = Field(default_factory=list, max_length=5)
+
+    @field_validator("required_term_groups")
+    @classmethod
+    def validate_required_groups(cls, groups: list[list[str]]) -> list[list[str]]:
+        for group in groups:
+            if not 1 <= len(group) <= 80:
+                raise ValueError("each required term group must contain 1-80 terms")
+            cls.valid_terms(group)
+        return groups
 
     @field_validator("include_terms", "exclude_terms")
     @classmethod
@@ -249,6 +259,11 @@ def select_news(
         for topic_id in source.allowed_topic_ids:
             topic = topics[topic_id]
             if any(_contains_phrase(corpus, x) for x in topic.exclude_terms):
+                continue
+            if not all(
+                any(_contains_phrase(corpus, term) for term in group)
+                for group in topic.required_term_groups
+            ):
                 continue
             if any(_contains_phrase(corpus, x) for x in topic.include_terms):
                 matched.append(topic.display_name)
