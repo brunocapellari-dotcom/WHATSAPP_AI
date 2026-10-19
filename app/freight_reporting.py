@@ -160,6 +160,7 @@ class PriceMovement:
 @dataclass
 class _OfferState:
     offer: FreightObservation
+    highest_offer: FreightObservation
     first_seen: datetime
     last_seen: datetime
     absences: int = 0
@@ -411,9 +412,13 @@ class FreightReportEngine:
             key = o.carrier_key
             prior = self._offers.get(key)
             if prior is None:
-                self._offers[key] = _OfferState(o, _local(o.published_at), _local(o.published_at))
+                self._offers[key] = _OfferState(o, o, _local(o.published_at), _local(o.published_at))
                 new.add(key)
             elif _local(o.published_at) >= prior.last_seen:
+                # The latest publication is used to calculate chronological
+                # price movements, independently of the highest quoted value.
+                if o.rate > prior.highest_offer.rate:
+                    prior.highest_offer = o
                 if prior.offer.rate != o.rate and prior.offer.rate_unit == o.rate_unit:
                     delta = o.rate - prior.offer.rate
                     pct = (delta / prior.offer.rate * 100).quantize(
@@ -425,6 +430,10 @@ class FreightReportEngine:
                 prior.last_seen = _local(o.published_at)
                 prior.absences = 0
                 reconfirmed.add(key)
+            # A delayed, earlier quotation may still be the highest advertised
+            # value. Keep it for consolidation without extending offer life.
+            if prior is not None and o.rate > prior.highest_offer.rate:
+                prior.highest_offer = o
             # A message older than the most recently confirmed publication
             # cannot reconfirm the cargo and erase recorded absences.
             if prior is None or _local(o.published_at) >= prior.last_seen:
@@ -439,7 +448,7 @@ class FreightReportEngine:
                     del self._offers[key]
                     expired += 1
         self._last_cutoff = cutoff
-        active = tuple(s.offer for _, s in sorted(
+        active = tuple(s.highest_offer for _, s in sorted(
             self._offers.items(), key=lambda x: (_norm(x[1].offer.origin_city),
                 _norm(x[1].offer.carrier), _norm(x[1].offer.destination_city), x[0])))
         return FullReport(cutoff, active, tuple(movements), len(new),
