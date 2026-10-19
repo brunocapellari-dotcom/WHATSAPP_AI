@@ -261,3 +261,36 @@ def test_two_distinct_confirmed_cargos_are_not_merged() -> None:
     simple = simplify(full)
     assert simple.total_open_lots == 3
     assert sum(simple.origin_totals.values()) == 3
+
+
+def test_historical_backfill_cannot_open_old_cargo_in_live_report() -> None:
+    # Collector is activated on Oct 19 and recovers Oct 15 messages.
+    delayed = replace(
+        offer("backfill", published=dt(15, 7)),
+        received_at=dt(19, 7),
+    )
+    engine = FreightReportEngine()
+    report = engine.process(dt(19, 8, 30), [delayed])
+    assert report.active_offers == ()
+    assert report.new_offers == 0
+    assert simplify(report).total_open_lots == 0
+    # Permanent historical exclusion; not reintroduced at the next cutoff.
+    assert engine.process(dt(19, 14), [delayed]).active_offers == ()
+
+
+def test_recent_out_of_order_message_does_not_reset_confirmed_absences() -> None:
+    engine = FreightReportEngine()
+    engine.process(dt(15, 8, 30), [offer("newer", published=dt(15, 7))])
+    engine.process(dt(15, 14), [])
+    # Earlier than the message already confirmed at 07:00, but reached us
+    # on the later cutoff. It must NOT extend the cargo's active lifetime.
+    historical = replace(
+        offer("older", published=dt(15, 6, 30)),
+        received_at=dt(15, 15),
+    )
+    at_17 = engine.process(dt(15, 17), [historical])
+    assert at_17.reconfirmed_offers == 0
+    assert len(at_17.active_offers) == 1
+    final = engine.process(dt(16, 8, 30), [])
+    assert final.expired_offers == 1
+    assert final.active_offers == ()
