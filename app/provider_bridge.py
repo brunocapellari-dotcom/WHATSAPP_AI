@@ -140,7 +140,7 @@ class SQLiteBridgeOutbox:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
                 """
-                SELECT outbox_id, source_event_id, nonce, ciphertext
+                SELECT outbox_id, source_event_id, nonce, ciphertext, status, attempts
                 FROM provider_outbox
                 WHERE
                     (status='PENDING' AND next_attempt_at <= ?)
@@ -153,20 +153,37 @@ class SQLiteBridgeOutbox:
                 """,
                 (now, stale_before, max(1, min(limit, 100))),
             ).fetchall()
-            ids = [int(row["outbox_id"]) for row in rows]
-            for outbox_id in ids:
+            claimed_rows = []
+            for row in rows:
+                outbox_id = int(row["outbox_id"])
+                attempts = int(row["attempts"])
+                if str(row["status"]) == "PROCESSING":
+                    attempts += 1
+                if attempts >= self.max_attempts:
+                    conn.execute(
+                        """
+                        UPDATE provider_outbox
+                        SET attempts=?, status='DEAD', dead_at=?,
+                            processing_started_at=NULL,
+                            last_error='stale processing claim exceeded retry limit'
+                        WHERE outbox_id=?
+                        """,
+                        (attempts, now, outbox_id),
+                    )
+                    continue
                 conn.execute(
                     """
                     UPDATE provider_outbox
-                    SET status='PROCESSING', processing_started_at=?
+                    SET attempts=?, status='PROCESSING', processing_started_at=?
                     WHERE outbox_id=?
                     """,
-                    (now, outbox_id),
+                    (attempts, now, outbox_id),
                 )
+                claimed_rows.append(row)
             conn.execute("COMMIT")
 
         result: list[tuple[int, RawInboundEvent]] = []
-        for row in rows:
+        for row in claimed_rows:
             outbox_id = int(row["outbox_id"])
             source_id = str(row["source_event_id"])
             try:
@@ -361,6 +378,7 @@ def normalize_wppconnect_event(
     payload: dict[str, Any],
     *,
     allowed_sessions: set[str],
+    allowed_chat_ids: set[str] | None = None,
 ) -> RawInboundEvent | None:
     if payload.get("event") != "onmessage":
         return None
@@ -394,6 +412,8 @@ def normalize_wppconnect_event(
     raw_text = caption or body or ""
 
     chat_id = _str_or_none(payload.get("chatId"), max_length=256)
+    if allowed_chat_ids is not None and (not chat_id or chat_id not in allowed_chat_ids):
+        return None
     sender = _str_or_none(payload.get("from"), max_length=256)
     source_suffix = chat_id or sender or "unknown"
     source = f"wppconnect:{session}:{source_suffix}"[:256]
@@ -549,6 +569,20 @@ def _allowed_sessions() -> set[str]:
     return sessions
 
 
+def _allowed_chat_ids() -> set[str]:
+    chats = {value.strip() for value in os.environ.get("WPP_ALLOWED_CHAT_IDS", "").split(",") if value.strip()}
+    if not chats:
+        raise BridgeConfigError("WPP_ALLOWED_CHAT_IDS is required; fail closed")
+    return chats
+
+
+def _incoming_webhook_secret() -> str:
+    secret = os.environ.get("WPP_INBOUND_WEBHOOK_SECRET", "")
+    if len(secret) < 32:
+        raise BridgeConfigError("WPP_INBOUND_WEBHOOK_SECRET must contain at least 32 characters")
+    return secret
+
+
 def _outbox_from_env() -> SQLiteBridgeOutbox:
     outbox = SQLiteBridgeOutbox(
         os.environ.get("BRIDGE_DB_PATH", "/data/bridge/outbox.sqlite3"),
@@ -622,6 +656,8 @@ async def lifespan(app: FastAPI):
     app.state.outbox = outbox
     app.state.dispatcher = _dispatcher_from_env(outbox)
     app.state.allowed_sessions = _allowed_sessions()
+    app.state.allowed_chat_ids = _allowed_chat_ids()
+    app.state.inbound_webhook_secret = _incoming_webhook_secret()
     task = asyncio.create_task(_dispatch_loop(app))
     app.state.dispatch_task = task
     try:
@@ -659,7 +695,17 @@ def readyz(request: Request) -> dict[str, Any]:
 
 @app.post("/v1/wppconnect/events", status_code=status.HTTP_202_ACCEPTED)
 async def wppconnect_event(request: Request) -> dict[str, Any]:
-    body = await request.body()
+    supplied = request.headers.get("x-wpp-webhook-secret", "")
+    if not hmac.compare_digest(supplied, request.app.state.inbound_webhook_secret):
+        raise HTTPException(status_code=401, detail="invalid webhook credentials")
+    length = request.headers.get("content-length")
+    if length is not None and (not length.isdecimal() or int(length) > MAX_WPP_BODY_BYTES):
+        raise HTTPException(status_code=413, detail="WPPConnect webhook body too large")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_WPP_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="WPPConnect webhook body too large")
     if len(body) > MAX_WPP_BODY_BYTES:
         raise HTTPException(status_code=413, detail="WPPConnect webhook body too large")
     try:
@@ -673,6 +719,7 @@ async def wppconnect_event(request: Request) -> dict[str, Any]:
         event = normalize_wppconnect_event(
             payload,
             allowed_sessions=request.app.state.allowed_sessions,
+            allowed_chat_ids=request.app.state.allowed_chat_ids,
         )
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

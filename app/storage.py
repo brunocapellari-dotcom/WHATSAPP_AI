@@ -1,23 +1,58 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+from collections.abc import Iterable
+from contextlib import contextmanager
+from threading import RLock
 from typing import Protocol
 
 import psycopg
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from psycopg import sql
 
+from .freight_reporting import FreightObservation
 from .models import FreightEvent, RawInboundEvent
+from .municipalities import municipality_query
 from .security import sha256_hex
 
 
 class FreightStore(Protocol):
+    def ingestion_lock(self, tenant_id: str): ...
     def save_raw(self, tenant_id: str, provider: str, event: RawInboundEvent) -> str: ...
     def has_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> bool: ...
     def mark_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> None: ...
     def find_logical_event(self, tenant_id: str, logical_key: str) -> FreightEvent | None: ...
     def recent_events(self, tenant_id: str, limit: int = 100) -> list[tuple[str, FreightEvent]]: ...
+    def candidate_events(
+        self,
+        tenant_id: str,
+        *,
+        product: str | None = None,
+        origin: str | None = None,
+        destination: str | None = None,
+        company: str | None = None,
+        loading_point: str | None = None,
+    ) -> list[tuple[str, FreightEvent]]: ...
     def save_event(self, event: FreightEvent, logical_key: str) -> None: ...
+    def save_and_enqueue(
+        self,
+        event: FreightEvent,
+        logical_key: str,
+        provider: str,
+        source_event_id: str,
+        *,
+        publish: bool = True,
+        observations: Iterable[FreightObservation] = (),
+    ) -> None: ...
+    def save_observations_and_mark_source(
+        self,
+        tenant_id: str,
+        provider: str,
+        source_event_id: str,
+        observations: Iterable[FreightObservation],
+    ) -> None: ...
     def enqueue_outbox(self, event: FreightEvent) -> None: ...
     def pending_outbox(self, tenant_id: str, limit: int = 100) -> list[tuple[int, FreightEvent]]: ...
     def mark_outbox_sent(self, tenant_id: str, outbox_id: int) -> None: ...
@@ -30,15 +65,23 @@ class InMemoryFreightStore:
     """Test-only store. Production must use PostgresFreightStore."""
 
     def __init__(self, max_outbox_attempts: int = 8) -> None:
+        self._ingestion_mutex = RLock()
         self.raw: list[dict] = []
         self.source_ids: set[tuple[str, str, str]] = set()
         self.events: dict[tuple[str, str], FreightEvent] = {}
         self.event_versions: dict[tuple[str, str, int], FreightEvent] = {}
+        self.report_observations: dict[tuple[str, str], FreightObservation] = {}
         self.outbox: dict[int, FreightEvent] = {}
         self.dead_outbox: dict[int, FreightEvent] = {}
         self.outbox_attempts: dict[int, int] = {}
         self._next_outbox_id = 1
         self.max_outbox_attempts = max_outbox_attempts
+
+    @contextmanager
+    def ingestion_lock(self, tenant_id: str):
+        # Test store serializes ingestion just like the database implementation.
+        with self._ingestion_mutex:
+            yield
 
     def save_raw(self, tenant_id: str, provider: str, event: RawInboundEvent) -> str:
         ref = f"memory://raw/{tenant_id}/{provider}/{event.source_event_id}"
@@ -63,12 +106,85 @@ class InMemoryFreightStore:
         rows.sort(key=lambda item: item[1].timestamp, reverse=True)
         return rows[:limit]
 
+    def candidate_events(
+        self,
+        tenant_id: str,
+        *,
+        product: str | None = None,
+        origin: str | None = None,
+        destination: str | None = None,
+        company: str | None = None,
+        loading_point: str | None = None,
+    ) -> list[tuple[str, FreightEvent]]:
+        rows = self.recent_events(tenant_id, limit=max(1, len(self.events)))
+        result: list[tuple[str, FreightEvent]] = []
+        for logical_key, event in rows:
+            candidate_company = next(iter(event.entities.get("company", [])), None)
+            candidate_loading = next(iter(event.entities.get("loading_point", [])), None)
+            if product is not None and event.product != product:
+                continue
+            if origin is not None and (
+                event.origin is None or event.origin.normalized_value != origin
+            ):
+                continue
+            if destination is not None and (
+                event.destination is None
+                or event.destination.normalized_value != destination
+            ):
+                continue
+            if company is not None and (
+                candidate_company is None
+                or candidate_company.normalized_value != company
+            ):
+                continue
+            if loading_point is not None and (
+                candidate_loading is None
+                or candidate_loading.normalized_value != loading_point
+            ):
+                continue
+            result.append((logical_key, event))
+        return result
+
     def save_event(self, event: FreightEvent, logical_key: str) -> None:
         self.event_versions.setdefault(
             (event.tenant_id, event.event_id, event.version),
             event.model_copy(deep=True),
         )
         self.events[(event.tenant_id, logical_key)] = event
+
+    def save_and_enqueue(
+        self,
+        event: FreightEvent,
+        logical_key: str,
+        provider: str,
+        source_event_id: str,
+        *,
+        publish: bool = True,
+        observations: Iterable[FreightObservation] = (),
+    ) -> None:
+        self.save_event(event, logical_key)
+        for observation in observations:
+            self.report_observations.setdefault(
+                (event.tenant_id, observation.source_observation_id),
+                observation,
+            )
+        if publish:
+            self.enqueue_outbox(event)
+        self.mark_source_event(event.tenant_id, provider, source_event_id)
+
+    def save_observations_and_mark_source(
+        self,
+        tenant_id: str,
+        provider: str,
+        source_event_id: str,
+        observations: Iterable[FreightObservation],
+    ) -> None:
+        for observation in observations:
+            self.report_observations.setdefault(
+                (tenant_id, observation.source_observation_id),
+                observation,
+            )
+        self.mark_source_event(tenant_id, provider, source_event_id)
 
     def enqueue_outbox(self, event: FreightEvent) -> None:
         all_events = [*self.outbox.values(), *self.dead_outbox.values()]
@@ -155,6 +271,40 @@ class PostgresFreightStore:
         self.worker_mode = worker_mode
         self.max_outbox_attempts = max_outbox_attempts
         self.claim_timeout_seconds = claim_timeout_seconds
+        self._ingestion_connection = None
+
+    @contextmanager
+    def ingestion_lock(self, tenant_id: str):
+        """Serialize one tenant ingestion and reuse its database session."""
+        if self._ingestion_connection is not None:
+            raise RuntimeError("nested ingestion_lock is not supported")
+        digest = hashlib.sha256(("whatsapp-ingest:" + tenant_id).encode()).digest()
+        lock_id = int.from_bytes(digest[:8], "big", signed=True)
+        with self._connection() as conn, conn.cursor() as cur:
+            self._ingestion_connection = conn
+            cur.execute("SELECT pg_advisory_lock(%s)", (lock_id,))
+            try:
+                yield
+            finally:
+                try:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (lock_id,))
+                finally:
+                    self._ingestion_connection = None
+
+    @contextmanager
+    def _connection(self, *, connect_timeout: int | None = None):
+        if self._ingestion_connection is not None:
+            yield self._ingestion_connection
+            return
+        if connect_timeout is None:
+            with psycopg.connect(self.database_url) as conn:
+                yield conn
+            return
+        with psycopg.connect(
+            self.database_url,
+            connect_timeout=connect_timeout,
+        ) as conn:
+            yield conn
 
     @classmethod
     def from_env(cls, *, worker: bool = False) -> PostgresFreightStore:
@@ -187,7 +337,7 @@ class PostgresFreightStore:
         digest = sha256_hex(raw)
         aad = f"{tenant_id}:{provider}:{event.source_event_id}".encode()
         nonce, ciphertext = self.cipher.encrypt(raw, aad)
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """
@@ -212,7 +362,7 @@ class PostgresFreightStore:
         return f"postgres://whatsapp_raw_events/{tenant_id}/{provider}/{event.source_event_id}"
 
     def has_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> bool:
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 "SELECT 1 FROM whatsapp_processed_source_events WHERE tenant_id=%s AND provider=%s AND source_event_id=%s",
@@ -221,7 +371,7 @@ class PostgresFreightStore:
             return cur.fetchone() is not None
 
     def mark_source_event(self, tenant_id: str, provider: str, source_event_id: str) -> None:
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """
@@ -233,7 +383,7 @@ class PostgresFreightStore:
             conn.commit()
 
     def find_logical_event(self, tenant_id: str, logical_key: str) -> FreightEvent | None:
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 "SELECT payload FROM whatsapp_freight_events WHERE tenant_id=%s AND logical_key=%s",
@@ -244,7 +394,7 @@ class PostgresFreightStore:
 
     def recent_events(self, tenant_id: str, limit: int = 100) -> list[tuple[str, FreightEvent]]:
         limit = max(1, min(limit, 500))
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """
@@ -259,9 +409,50 @@ class PostgresFreightStore:
             rows = cur.fetchall()
         return [(str(row[0]), FreightEvent.model_validate(row[1])) for row in rows]
 
+    def candidate_events(
+        self,
+        tenant_id: str,
+        *,
+        product: str | None = None,
+        origin: str | None = None,
+        destination: str | None = None,
+        company: str | None = None,
+        loading_point: str | None = None,
+    ) -> list[tuple[str, FreightEvent]]:
+        clauses = ["tenant_id=%s"]
+        params: list[object] = [tenant_id]
+        filters = (
+            ("payload->>'product'", product),
+            ("payload #>> '{origin,normalized_value}'", origin),
+            ("payload #>> '{destination,normalized_value}'", destination),
+            ("payload #>> '{entities,company,0,normalized_value}'", company),
+            (
+                "payload #>> '{entities,loading_point,0,normalized_value}'",
+                loading_point,
+            ),
+        )
+        for expression, value in filters:
+            if value is not None:
+                clauses.append(f"{expression}=%s")
+                params.append(value)
+        # SQL identifiers/operators are static allowlisted fragments; dynamic
+        # values remain bound as query parameters, never string-interpolated.
+        query = sql.SQL(
+            "SELECT logical_key, payload FROM whatsapp_freight_events "
+            "WHERE {} ORDER BY updated_at DESC"
+        ).format(sql.SQL(" AND ").join(sql.SQL(clause) for clause in clauses))
+        with self._connection() as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        return [
+            (str(row[0]), FreightEvent.model_validate(row[1]))
+            for row in rows
+        ]
+
     def save_event(self, event: FreightEvent, logical_key: str) -> None:
         payload = event.model_dump(mode="json")
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, event.tenant_id)
             cur.execute(
                 """
@@ -296,8 +487,177 @@ class PostgresFreightStore:
             )
             conn.commit()
 
+    @staticmethod
+    def _insert_report_observations(
+        cur,
+        tenant_id: str,
+        provider: str,
+        source_event_id: str,
+        observations: Iterable[FreightObservation],
+    ) -> None:
+        for observation in observations:
+            if (
+                observation.origin_ibge_code is None
+                or observation.destination_ibge_code is None
+                or observation.source_text_sha256 is None
+            ):
+                raise ValueError(
+                    "canonical IBGE codes and source hash are required for report observation"
+                )
+            cur.execute(
+                """
+                INSERT INTO whatsapp_freight_observations (
+                    tenant_id, source_observation_id, provider, source_event_id,
+                    source_line_number, published_at, received_at, carrier, product,
+                    origin_ibge_code, origin_city, origin_uf,
+                    destination_ibge_code, destination_city, destination_uf,
+                    loading_point, rate, rate_unit, toll_status, vehicle_type,
+                    vehicle_count, offer_reference, cargo_reference,
+                    shipment_reference, source_text_sha256,
+                    extraction_confidence, validation_status
+                ) VALUES (
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                    %s,%s,%s,%s,%s,%s,%s,%s,'VALIDATED'
+                )
+                ON CONFLICT (tenant_id, source_observation_id) DO NOTHING
+                """,
+                (
+                    tenant_id,
+                    observation.source_observation_id,
+                    provider,
+                    source_event_id,
+                    observation.source_line_number,
+                    observation.published_at,
+                    observation.received_at,
+                    observation.carrier,
+                    observation.product,
+                    int(observation.origin_ibge_code),
+                    observation.origin_city,
+                    observation.origin_uf,
+                    int(observation.destination_ibge_code),
+                    observation.destination_city,
+                    observation.destination_uf,
+                    observation.loading_point,
+                    observation.rate,
+                    observation.rate_unit,
+                    observation.toll_status,
+                    observation.vehicle_type,
+                    observation.vehicle_count,
+                    observation.offer_reference,
+                    observation.cargo_reference,
+                    observation.shipment_reference,
+                    observation.source_text_sha256,
+                    observation.extraction_confidence,
+                ),
+            )
+
+    def save_and_enqueue(
+        self,
+        event: FreightEvent,
+        logical_key: str,
+        provider: str,
+        source_event_id: str,
+        *,
+        publish: bool = True,
+        observations: Iterable[FreightObservation] = (),
+    ) -> None:
+        """Atomically persist event, report observations, outbox and idempotency marker."""
+        payload = json.dumps(event.model_dump(mode="json"))
+        with self._connection() as conn, conn.cursor() as cur:
+            self._set_tenant(cur, event.tenant_id)
+            cur.execute(
+                """INSERT INTO whatsapp_freight_event_versions
+                (tenant_id, event_id, version, logical_key, payload, observed_at)
+                VALUES (%s,%s,%s,%s,%s::jsonb,%s)
+                ON CONFLICT (tenant_id, event_id, version) DO NOTHING""",
+                (event.tenant_id, event.event_id, event.version, logical_key, payload, event.timestamp),
+            )
+            cur.execute(
+                """INSERT INTO whatsapp_freight_events
+                (tenant_id, logical_key, event_id, version, payload)
+                VALUES (%s,%s,%s,%s,%s::jsonb)
+                ON CONFLICT (tenant_id, logical_key) DO UPDATE
+                SET event_id=EXCLUDED.event_id, version=EXCLUDED.version,
+                    payload=EXCLUDED.payload, updated_at=now()""",
+                (event.tenant_id, logical_key, event.event_id, event.version, payload),
+            )
+            self._insert_report_observations(
+                cur,
+                event.tenant_id,
+                provider,
+                source_event_id,
+                observations,
+            )
+            if publish:
+                cur.execute(
+                    """INSERT INTO whatsapp_agrolog_outbox
+                    (tenant_id, event_id, event_version, payload)
+                    VALUES (%s,%s,%s,%s::jsonb)
+                    ON CONFLICT (event_id, event_version) DO NOTHING""",
+                    (event.tenant_id, event.event_id, event.version, payload),
+                )
+            cur.execute(
+                """INSERT INTO whatsapp_processed_source_events
+                (tenant_id, provider, source_event_id)
+                VALUES (%s,%s,%s) ON CONFLICT DO NOTHING""",
+                (event.tenant_id, provider, source_event_id),
+            )
+            conn.commit()
+
+    def save_observations_and_mark_source(
+        self,
+        tenant_id: str,
+        provider: str,
+        source_event_id: str,
+        observations: Iterable[FreightObservation],
+    ) -> None:
+        with self._connection() as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
+            self._insert_report_observations(
+                cur,
+                tenant_id,
+                provider,
+                source_event_id,
+                observations,
+            )
+            cur.execute(
+                """
+                INSERT INTO whatsapp_processed_source_events
+                    (tenant_id, provider, source_event_id)
+                VALUES (%s,%s,%s)
+                ON CONFLICT DO NOTHING
+                """,
+                (tenant_id, provider, source_event_id),
+            )
+            conn.commit()
+
+    def resolve_municipality(
+        self,
+        raw: str,
+    ) -> tuple[str, str, str] | None:
+        query = municipality_query(raw)
+        if query is None:
+            return None
+        sql_query = """
+            SELECT m.official_name, m.uf, m.ibge_code
+            FROM whatsapp_municipality_aliases a
+            JOIN whatsapp_municipalities m ON m.ibge_code = a.ibge_code
+            WHERE a.alias_normalized=%s
+        """
+        params: list[object] = [query.normalized_name]
+        if query.explicit_uf is not None:
+            sql_query += " AND m.uf=%s"
+            params.append(query.explicit_uf)
+        sql_query += " ORDER BY m.ibge_code"
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql_query, params)
+            rows = cur.fetchall()
+        if len(rows) != 1:
+            return None
+        return str(rows[0][0]), str(rows[0][1]), str(rows[0][2])
+
     def enqueue_outbox(self, event: FreightEvent) -> None:
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, event.tenant_id)
             cur.execute(
                 """
@@ -317,12 +677,12 @@ class PostgresFreightStore:
 
     def pending_outbox(self, tenant_id: str, limit: int = 100) -> list[tuple[int, FreightEvent]]:
         self._require_worker()
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """
                 WITH claimed AS (
-                    SELECT outbox_id
+                    SELECT outbox_id, status AS prior_status
                     FROM whatsapp_agrolog_outbox
                     WHERE tenant_id=%s
                       AND (
@@ -337,21 +697,57 @@ class PostgresFreightStore:
                     FOR UPDATE SKIP LOCKED
                 )
                 UPDATE whatsapp_agrolog_outbox AS o
-                SET status='PROCESSING', processing_started_at=now()
+                SET attempts=o.attempts + CASE
+                        WHEN claimed.prior_status='PROCESSING' THEN 1 ELSE 0
+                    END,
+                    status=CASE
+                        WHEN claimed.prior_status='PROCESSING'
+                             AND o.attempts + 1 >= %s THEN 'DEAD'
+                        ELSE 'PROCESSING'
+                    END,
+                    dead_at=CASE
+                        WHEN claimed.prior_status='PROCESSING'
+                             AND o.attempts + 1 >= %s THEN now()
+                        ELSE o.dead_at
+                    END,
+                    processing_started_at=CASE
+                        WHEN claimed.prior_status='PROCESSING'
+                             AND o.attempts + 1 >= %s THEN NULL
+                        ELSE now()
+                    END,
+                    last_error=CASE
+                        WHEN claimed.prior_status='PROCESSING'
+                             AND o.attempts + 1 >= %s
+                        THEN 'stale processing claim exceeded retry limit'
+                        ELSE o.last_error
+                    END
                 FROM claimed
                 WHERE o.outbox_id = claimed.outbox_id
                   AND o.tenant_id=%s
-                RETURNING o.outbox_id, o.payload
+                RETURNING o.outbox_id, o.payload, o.status
                 """,
-                (tenant_id, self.claim_timeout_seconds, limit, tenant_id),
+                (
+                    tenant_id,
+                    self.claim_timeout_seconds,
+                    limit,
+                    self.max_outbox_attempts,
+                    self.max_outbox_attempts,
+                    self.max_outbox_attempts,
+                    self.max_outbox_attempts,
+                    tenant_id,
+                ),
             )
             rows = cur.fetchall()
             conn.commit()
-        return [(int(row[0]), FreightEvent.model_validate(row[1])) for row in rows]
+        return [
+            (int(row[0]), FreightEvent.model_validate(row[1]))
+            for row in rows
+            if row[2] == "PROCESSING"
+        ]
 
     def mark_outbox_sent(self, tenant_id: str, outbox_id: int) -> None:
         self._require_worker()
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """
@@ -365,7 +761,7 @@ class PostgresFreightStore:
 
     def mark_outbox_failed(self, tenant_id: str, outbox_id: int, error: str) -> None:
         self._require_worker()
-        with psycopg.connect(self.database_url) as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """
@@ -403,7 +799,7 @@ class PostgresFreightStore:
     def readiness_check(self) -> None:
         if self.worker_mode:
             raise RuntimeError("ingress readiness cannot use worker credentials")
-        with psycopg.connect(self.database_url, connect_timeout=5) as conn, conn.cursor() as cur:
+        with self._connection(connect_timeout=5) as conn, conn.cursor() as cur:
             self._set_tenant(cur, "__healthcheck__")
             cur.execute(
                 """
@@ -418,7 +814,7 @@ class PostgresFreightStore:
     def outbox_status_counts(self, tenant_id: str) -> dict[str, int]:
         self._require_worker()
         counts = {"PENDING": 0, "PROCESSING": 0, "SENT": 0, "DEAD": 0}
-        with psycopg.connect(self.database_url, connect_timeout=5) as conn, conn.cursor() as cur:
+        with self._connection(connect_timeout=5) as conn, conn.cursor() as cur:
             self._set_tenant(cur, tenant_id)
             cur.execute(
                 """

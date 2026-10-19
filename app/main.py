@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
 import time
 import uuid
+from dataclasses import replace
 
 from fastapi import FastAPI, Header, HTTPException, Request, status
 
-from .models import IngestionResult, RawInboundEvent
+from .freight_reporting import FreightObservation
+from .models import IngestionResult, RawInboundEvent, utc_now
 from .pipeline import FreightPipeline
+from .report_ingest_adapter import observations_from_message
 from .security import SecurityError, WebhookSecretResolver, verify_webhook_signature
 from .storage import PostgresFreightStore
 
@@ -37,6 +41,41 @@ app = FastAPI(
 )
 
 
+def _report_observation_factory(
+    store: PostgresFreightStore,
+    event: RawInboundEvent,
+    provider: str,
+) -> list[FreightObservation]:
+    # Provider-scoped IDs prevent two authorized providers with the same
+    # message ID from silently overwriting each other's report observations.
+    scoped_id = hashlib.sha256(
+        f"{provider}\0{event.source_event_id}".encode()
+    ).hexdigest()
+    observations, rejected = observations_from_message(
+        source_id=scoped_id,
+        text=event.raw_text,
+        published_at=event.message_timestamp,
+        received_at=utc_now(),
+        resolve_municipality=store.resolve_municipality,
+    )
+    if rejected:
+        logger.warning(
+            json.dumps(
+                {
+                    "event": "report_observations_rejected",
+                    "source_event_id_hash": hashlib.sha256(
+                        event.source_event_id.encode("utf-8")
+                    ).hexdigest()[:12],
+                    "rejected_count": len(rejected),
+                },
+                sort_keys=True,
+            )
+        )
+    # Keep the source event ID faithful to the original provider payload;
+    # only the internal observation ID is scoped to the provider.
+    return [replace(item, source_event_id=event.source_event_id) for item in observations]
+
+
 def _store() -> PostgresFreightStore:
     return PostgresFreightStore.from_env()
 
@@ -54,6 +93,20 @@ def _validate_security_identifier(value: str, *, kind: str) -> str:
     if not pattern.fullmatch(value):
         raise HTTPException(status_code=400, detail=f"invalid {kind} identifier")
     return value
+
+
+async def _bounded_request_body(request: Request) -> bytes:
+    length = request.headers.get("content-length")
+    if length is not None and (
+        not length.isdecimal() or int(length) > MAX_BODY_BYTES
+    ):
+        raise HTTPException(status_code=413, detail="webhook body too large")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="webhook body too large")
+    return bytes(body)
 
 
 def _validate_attachments(event: RawInboundEvent) -> None:
@@ -141,9 +194,7 @@ async def provider_event(
 ) -> IngestionResult:
     provider = _validate_security_identifier(provider, kind="provider")
     x_tenant_id = _validate_security_identifier(x_tenant_id, kind="tenant")
-    body = await request.body()
-    if len(body) > MAX_BODY_BYTES:
-        raise HTTPException(status_code=413, detail="webhook body too large")
+    body = await _bounded_request_body(request)
 
     resolver = WebhookSecretResolver.from_env()
     try:
@@ -155,7 +206,18 @@ async def provider_event(
             secret=secret,
         )
     except SecurityError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        logger.warning(
+            json.dumps(
+                {
+                    "event": "webhook_authentication_failed",
+                    "provider": provider,
+                    "tenant_id_hash": hashlib.sha256(x_tenant_id.encode("utf-8")).hexdigest()[:12],
+                    "error_type": type(exc).__name__,
+                },
+                sort_keys=True,
+            )
+        )
+        raise HTTPException(status_code=401, detail="invalid webhook authentication") from exc
 
     try:
         raw = RawInboundEvent.model_validate_json(body)
@@ -163,5 +225,11 @@ async def provider_event(
         raise HTTPException(status_code=422, detail="malformed provider payload") from exc
 
     _validate_attachments(raw)
-    pipeline = FreightPipeline(_store())
+    store = _store()
+    pipeline = FreightPipeline(
+        store,
+        report_observation_factory=lambda event: _report_observation_factory(
+            store, event, provider
+        ),
+    )
     return pipeline.ingest(x_tenant_id, provider, raw)

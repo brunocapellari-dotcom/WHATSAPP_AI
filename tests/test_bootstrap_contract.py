@@ -52,9 +52,10 @@ def test_runtime_credentials_are_split_by_role() -> None:
 def test_release_migration_revokes_cloudsql_superuser_from_runtime() -> None:
     migration = read("scripts/release_migrate.py")
     assert 'REVOKE cloudsqlsuperuser FROM {}' in migration
-    assert migration.count('REVOKE cloudsqlsuperuser FROM {}') == 2
+    assert migration.count('REVOKE cloudsqlsuperuser FROM {}') == 3
     assert "GRANT whatsapp_ingestor" in migration
     assert "GRANT whatsapp_worker" in migration
+    assert "GRANT whatsapp_reporter" in migration
 
 
 def test_bootstrap_grants_worker_only_required_agrolog_invocation() -> None:

@@ -25,12 +25,13 @@ def main() -> int:
 
     ingest_role = _runtime_role("WHATSAPP_DB_INGEST_ROLE")
     worker_role = _runtime_role("WHATSAPP_DB_WORKER_ROLE")
+    report_role = _runtime_role("WHATSAPP_DB_REPORT_ROLE")
 
     applied = apply_migrations(database_url)
 
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
-            for role in (ingest_role, worker_role):
+            for role in (ingest_role, worker_role, report_role):
                 cur.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (role,))
                 if cur.fetchone() is None:
                     raise RuntimeError(f"required PostgreSQL login role does not exist: {role}")
@@ -43,6 +44,11 @@ def main() -> int:
             cur.execute(
                 sql.SQL("GRANT whatsapp_worker TO {}").format(
                     sql.Identifier(worker_role)
+                )
+            )
+            cur.execute(
+                sql.SQL("GRANT whatsapp_reporter TO {}").format(
+                    sql.Identifier(report_role)
                 )
             )
             cur.execute(
@@ -59,11 +65,16 @@ def main() -> int:
                         sql.Identifier(worker_role)
                     )
                 )
+                cur.execute(
+                    sql.SQL("REVOKE cloudsqlsuperuser FROM {}").format(
+                        sql.Identifier(report_role)
+                    )
+                )
         conn.commit()
 
     print(
         "release migrations complete; "
-        f"applied={len(applied)} runtime_role_grants=2"
+        f"applied={len(applied)} runtime_role_grants=3"
     )
     return 0
 

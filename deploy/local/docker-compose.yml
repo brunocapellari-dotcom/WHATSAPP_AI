@@ -12,6 +12,8 @@ services:
       DB_INGEST_PASSWORD: ${DB_INGEST_PASSWORD}
       DB_WORKER_USER: whatsapp_worker_app
       DB_WORKER_PASSWORD: ${DB_WORKER_PASSWORD}
+      DB_REPORT_USER: whatsapp_report_app
+      DB_REPORT_PASSWORD: ${DB_REPORT_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres-init.sh:/docker-entrypoint-initdb.d/00-runtime-users.sh:ro
@@ -39,6 +41,7 @@ services:
       DATABASE_URL_MIGRATOR: postgresql://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/whatsapp_ai
       WHATSAPP_DB_INGEST_ROLE: whatsapp_ingest_app
       WHATSAPP_DB_WORKER_ROLE: whatsapp_worker_app
+      WHATSAPP_DB_REPORT_ROLE: whatsapp_report_app
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,6 +54,29 @@ services:
       - ALL
     networks:
       - data_net
+    restart: "no"
+
+  municipality-sync:
+    profiles: ["bootstrap"]
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["python", "-m", "scripts.sync_ibge_municipalities"]
+    environment:
+      DATABASE_URL_MIGRATOR: postgresql://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/whatsapp_ai
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - data_net
+      - provider_net
     restart: "no"
 
   ingress:
@@ -161,6 +187,8 @@ services:
       BRIDGE_SENT_RETENTION_SECONDS: "604800"
       BRIDGE_MAX_WEBHOOK_BYTES: "5000000"
       WPP_ALLOWED_SESSIONS: ${WPP_SESSION_NAME}
+      WPP_ALLOWED_CHAT_IDS: ${WPP_ALLOWED_CHAT_IDS:?Set explicit authorized WhatsApp chat IDs}
+      WPP_INBOUND_WEBHOOK_SECRET: ${WPP_INBOUND_WEBHOOK_SECRET:?Set strong inbound webhook secret}
     depends_on:
       ingress:
         condition: service_healthy
@@ -233,6 +261,78 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  report-scheduler:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.report_scheduler_daemon"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL_REPORTER: postgresql://whatsapp_report_app:${DB_REPORT_PASSWORD}@postgres:5432/whatsapp_ai
+      WHATSAPP_REPORT_TENANT_ID: ${LOCAL_TENANT_ID}
+      REPORT_HEALTH_URLS: http://bridge:8081/readyz,http://wppconnect:21465/healthz
+      REPORT_HEALTH_ALLOWED_HOSTS: bridge,wppconnect
+      REPORT_POLL_SECONDS: "60"
+      REPORT_MAX_COLLECTOR_IDLE_SECONDS: "14400"
+      REPORT_HEALTH_TOLERANCE_SECONDS: "600"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      bridge:
+        condition: service_healthy
+      wppconnect:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - data_net
+      - provider_net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  report-sender:
+    profiles: ["send"]
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.report_sender"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL_REPORTER: postgresql://whatsapp_report_app:${DB_REPORT_PASSWORD}@postgres:5432/whatsapp_ai
+      WHATSAPP_REPORT_TENANT_ID: ${LOCAL_TENANT_ID}
+      WPP_REPORT_ORIGIN: http://wppconnect:21465
+      WPP_SESSION_NAME: ${WPP_SESSION_NAME}
+      WPP_REPORT_BEARER_TOKEN: ${WPP_REPORT_BEARER_TOKEN:-}
+      REPORT_SENDER_ENABLED: ${REPORT_SENDER_ENABLED:-0}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      wppconnect:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - data_net
+      - provider_net
     logging:
       driver: json-file
       options:

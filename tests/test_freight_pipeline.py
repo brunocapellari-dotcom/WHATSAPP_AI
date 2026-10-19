@@ -8,6 +8,7 @@ import pytest
 from app.models import FreightClassification, RateMovement, RawInboundEvent
 from app.parser import classify_message, parse_freight
 from app.pipeline import FreightPipeline
+from app.report_ingest_adapter import observations_from_message
 from app.storage import InMemoryFreightStore
 
 
@@ -406,3 +407,152 @@ def test_same_carrier_city_destination_but_different_loading_point_never_merges(
     assert first.event.entities["loading_point"][0].normalized_value == "ARMAZEM CARGILL"
     assert second.event.entities["loading_point"][0].normalized_value == "C VALE"
     assert second.event.rate_change is None
+
+
+def test_atomic_store_method_is_used_for_new_events() -> None:
+    class AtomicSpy(InMemoryFreightStore):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def save_and_enqueue(self, event, logical_key, provider, source_event_id, *, publish=True, observations=()):
+            self.calls.append((provider, source_event_id, publish))
+            return super().save_and_enqueue(
+                event, logical_key, provider, source_event_id,
+                publish=publish, observations=observations,
+            )
+
+        def save_event(self, event, logical_key):
+            assert self.calls, "pipeline must use atomic store API"
+            return super().save_event(event, logical_key)
+
+    store = AtomicSpy()
+    result = FreightPipeline(store).ingest("tenant-a", "fixture", raw("atomic-1", COMPLETE))
+    assert result.status == "PUBLISHED_TO_OUTBOX"
+    assert store.calls == [("fixture", "atomic-1", True)]
+    assert store.has_source_event("tenant-a", "fixture", "atomic-1")
+    assert len(store.outbox) == 1
+
+
+def test_concurrent_duplicate_source_events_are_serialized() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    store = InMemoryFreightStore()
+    pipeline = FreightPipeline(store)
+
+    def ingest_duplicate(_):
+        return pipeline.ingest("tenant-a", "fixture", raw("parallel-1", COMPLETE))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(ingest_duplicate, range(8)))
+
+    assert sum(r.status == "PUBLISHED_TO_OUTBOX" for r in results) == 1
+    assert sum(r.status == "DUPLICATE_SOURCE_EVENT" for r in results) == 7
+    assert len(store.outbox) == 1
+    assert len(store.raw) == 1
+
+
+
+def test_mutation_lookup_is_not_limited_to_100_recent_events() -> None:
+    store = InMemoryFreightStore()
+    pipeline = FreightPipeline(store)
+    target = """RODOVIVA TRANSPORTES
+FRETE SOJA
+ORIGEM: Sorriso - MT
+DESTINO: Rondonópolis - MT
+LOCAL DE EMBARQUE: Fazenda Target
+R$ 170,00 / T
+"""
+    first = pipeline.ingest(
+        "tenant-a",
+        "fixture",
+        raw(
+            "old-target",
+            target,
+            timestamp=datetime(2026, 10, 1, 7, 0, tzinfo=UTC),
+        ),
+    )
+    assert first.event is not None
+
+    for index in range(120):
+        filler = f"""CARRIER {index} TRANSPORTES
+FRETE SOJA
+ORIGEM: Sorriso - MT
+DESTINO: Rondonópolis - MT
+LOCAL DE EMBARQUE: Fazenda {index}
+R$ 160,00 / T
+"""
+        result = pipeline.ingest(
+            "tenant-a",
+            "fixture",
+            raw(
+                f"newer-{index}",
+                filler,
+                timestamp=datetime(2026, 10, 13, 8, 0, tzinfo=UTC),
+            ),
+        )
+        assert result.event is not None
+
+    update = """RODOVIVA TRANSPORTES
+ATUALIZAÇÃO NOVO VALOR R$ 175,00 / T
+SOJA
+ORIGEM: Sorriso - MT
+DESTINO: Rondonópolis - MT
+LOCAL DE EMBARQUE: Fazenda Target
+"""
+    changed = pipeline.ingest(
+        "tenant-a",
+        "fixture",
+        raw(
+            "old-target-update",
+            update,
+            timestamp=datetime(2026, 10, 13, 9, 0, tzinfo=UTC),
+        ),
+    )
+    assert changed.event is not None
+    assert changed.event.event_id == first.event.event_id
+    assert changed.event.version == 2
+    assert changed.event.rate == 175
+
+
+
+def test_multi_offer_observations_are_persisted_by_production_pipeline() -> None:
+    message = """FIBRA FORTE TRANSPORTES
+FRETE DE MILHO — R$/T
+Destino: Rondonópolis
+📍 São José do Rio Claro - (Faz São Jorge 1) R$ 160,00
+📍 Nova Maringá - (Faz Vale do Alegre) R$ 170,00
+📍 Nova Maringá - (Amz Binotti) R$ 170,00
+📍 Nova Maringá - (Faz Sto Antonio) R$ 185,00
+"""
+    known = {
+        "SÃO JOSÉ DO RIO CLARO": ("São José do Rio Claro", "MT", "5107303"),
+        "NOVA MARINGÁ": ("Nova Maringá", "MT", "5108907"),
+        "RONDONÓPOLIS": ("Rondonópolis", "MT", "5107602"),
+    }
+    store = InMemoryFreightStore()
+
+    def build(event: RawInboundEvent):
+        observations, rejected = observations_from_message(
+            source_id=event.source_event_id,
+            text=event.raw_text,
+            published_at=event.message_timestamp,
+            received_at=event.message_timestamp,
+            resolve_municipality=lambda city: known.get(city.upper()),
+        )
+        assert rejected == []
+        return observations
+
+    result = FreightPipeline(
+        store,
+        report_observation_factory=build,
+    ).ingest("tenant-a", "fixture", raw("multi-prod-1", message))
+
+    assert result.status in {
+        "PUBLISHED_TO_OUTBOX",
+        "CLASSIFIED_NO_FREIGHT_EVENT",
+        "QUALITY_REJECTED",
+    }
+    assert len(store.report_observations) == 4
+    rates = sorted(item.rate for item in store.report_observations.values())
+    assert rates == [160, 170, 170, 185]
