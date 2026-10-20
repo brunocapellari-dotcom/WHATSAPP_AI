@@ -350,3 +350,56 @@ def test_after_expiry_new_load_starts_new_highest_price_sequence() -> None:
     ])
     assert len(reappeared.active_offers) == 1
     assert reappeared.active_offers[0].rate == 190
+
+
+
+def test_carrier_offers_with_different_toll_terms_remain_commercially_distinct() -> None:
+    engine = FreightReportEngine()
+    report = engine.process(dt(15, 8, 30), [
+        replace(offer("a", rate="190"), toll_status="ADDITIONAL"),
+        replace(offer("b", rate="215"), toll_status="INCLUDED"),
+    ])
+    assert len(report.active_offers) == 2
+    assert {o.toll_status for o in report.active_offers} == {
+        "ADDITIONAL", "INCLUDED"
+    }
+    # A physical lot can still have several noncomparable freight offers.
+    simple = simplify(report)
+    assert simple.total_open_lots == 1
+    assert simple.rows[0].mixed_conditions
+    assert "Condições comerciais distintas" in simple.rows[0].rate_display
+    assert not report.movements
+
+
+def test_vehicle_types_and_counts_do_not_merge_same_carrier_quotes() -> None:
+    engine = FreightReportEngine()
+    report = engine.process(dt(15, 8, 30), [
+        replace(offer("a", rate="185"), vehicle_type="RODOTREM", vehicle_count=1),
+        replace(offer("b", rate="205"), vehicle_type="CARRETA", vehicle_count=1),
+        replace(offer("c", rate="198"), vehicle_type="RODOTREM", vehicle_count=2),
+    ])
+    assert len(report.active_offers) == 3
+    assert len({o.carrier_key for o in report.active_offers}) == 3
+    # Different terms must NOT produce a single deceptive price range.
+    assert simplify(report).rows[0].mixed_conditions
+
+
+def test_highest_carrier_rate_is_independent_for_each_toll_arrangement() -> None:
+    engine = FreightReportEngine()
+    first = engine.process(dt(15, 8, 30), [
+        replace(offer("a", rate="210"), toll_status="ADDITIONAL"),
+        replace(offer("b", rate="180"), toll_status="INCLUDED"),
+    ])
+    assert len(first.active_offers) == 2
+    later = engine.process(dt(15, 14), [
+        replace(
+            offer("c", rate="190", published=dt(15, 9)),
+            toll_status="ADDITIONAL",
+        ),
+    ])
+    assert len(later.active_offers) == 2
+    by_toll = {o.toll_status: o.rate for o in later.active_offers}
+    assert by_toll == {"ADDITIONAL": Decimal(210), "INCLUDED": Decimal(180)}
+    assert len(later.movements) == 1
+    assert later.movements[0].before == Decimal(210)
+    assert later.movements[0].after == Decimal(190)
