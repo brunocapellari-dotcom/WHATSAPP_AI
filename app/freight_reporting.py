@@ -123,7 +123,10 @@ class FreightObservation:
                          self.destination_ibge_code or self.destination_city,
                          self.destination_uf,
                          self.loading_point,
-                         self.product, self.rate_unit, self.shipment_reference,
+                         self.product, self.rate_unit, self.toll_status,
+                         self.vehicle_type,
+                         str(self.vehicle_count) if self.vehicle_count is not None else None,
+                         self.shipment_reference,
                          self.offer_reference, self.cargo_reference)
 
     @property
@@ -208,11 +211,14 @@ class SimplifiedRow:
     cargo_confirmed: bool
     commercial_offers: int
     mixed_units: bool = False
+    mixed_conditions: bool = False
 
     @property
     def rate_display(self) -> str:
         if self.mixed_units:
             return "Unidades distintas — consultar relatório completo"
+        if self.mixed_conditions:
+            return "Condições comerciais distintas — consultar relatório completo"
         suffix = "/t" if self.rate_unit == "BRL/t" else "/carga" if self.rate_unit == "BRL/carga" else " (" + self.rate_unit + ")"
         def formatted(value: Decimal) -> str:
             return f"{value:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
@@ -269,6 +275,11 @@ def simplify(full: FullReport) -> SimplifiedReport:
     for offers in reconciled.values():
         first = offers[0]
         units = {_norm(o.rate_unit) for o in offers}
+        comparable_terms = {
+            (_norm(o.rate_unit), _norm(o.toll_status), _norm(o.vehicle_type),
+             o.vehicle_count)
+            for o in offers
+        }
         prices = [o.rate for o in offers if _norm(o.rate_unit) == _norm(first.rate_unit)]
         rows.append(SimplifiedRow(
             origin_city=first.origin_city, origin_uf=first.origin_uf,
@@ -277,6 +288,7 @@ def simplify(full: FullReport) -> SimplifiedReport:
             rate_unit=first.rate_unit, lowest_rate=min(prices),
             highest_rate=max(prices), cargo_confirmed=any(o.cargo_confirmed for o in offers),
             commercial_offers=len(offers), mixed_units=len(units) > 1,
+            mixed_conditions=len(comparable_terms) > 1,
         ))
     rows.sort(key=lambda x: (_norm(x.origin_city), _norm(x.loading_point),
                              _norm(x.destination_city), _norm(x.product), _norm(x.rate_unit)))
