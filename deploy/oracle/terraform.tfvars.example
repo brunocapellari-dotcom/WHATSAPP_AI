@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars (local only, gitignored); replace every placeholder.
+compartment_ocid      = "ocid1.compartment.oc1..REPLACE"
+region                = "sa-santiago-1" # Verify the account's home region!
+availability_domain   = "REPLACE_WITH_REAL_AD_NAME"
+ubuntu_arm64_image_ocid = "ocid1.image.oc1..REPLACE"
+ssh_public_key_path   = "C:/Users/REPLACE/.ssh/id_ed25519.pub"
+admin_ssh_ipv4_cidr   = "203.0.113.42/32" # Replace with real admin /32.
+
+# Defaults intentionally block apply. Turn on ONLY after verified OCI inventory,
+# home region, remaining compute/storage quotas and absence of conflicts.
+home_region_verified                    = false
+always_free_quota_verified              = false
+no_existing_instance_or_network_conflict = false
