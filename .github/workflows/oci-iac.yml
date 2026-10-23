@@ -1,0 +1,44 @@
+name: OCI Infrastructure Validation
+
+on:
+  pull_request:
+    paths:
+      - "deploy/oracle/**"
+      - ".github/workflows/oci-iac.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: deploy/oracle
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 pinned
+        with:
+          persist-credentials: false
+      - name: Install verified Terraform runner
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2 pinned
+        with:
+          terraform_version: 1.14.0
+          terraform_wrapper: false
+      - name: Check HCL formatting
+        run: terraform fmt -check -diff -recursive
+      - name: Download OCI provider without connecting to account
+        run: terraform init -backend=false -input=false -no-color
+      - name: Validate plan configuration without credentials or apply
+        run: terraform validate -no-color
+      - name: Assert deployment gate remains fail-closed by default
+        run: |
+          grep -q 'default     = false' variables.tf
+          grep -q 'prevent_destroy = true' main.tf
+          grep -q 'admin_ssh_ipv4_cidr' main.tf
+          grep -q 'VM.Standard.A1.Flex' main.tf
+          if grep -R -nE '(0[.]0[.]0[.]0/0.*22|source *= *"0[.]0[.]0[.]0/0")' --include='*.tf' .; then
+            echo "Refusing public SSH exposure" >&2
+            exit 1
+          fi
